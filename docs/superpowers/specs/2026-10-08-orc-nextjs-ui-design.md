@@ -2,7 +2,7 @@
 
 ## Trạng thái và mục tiêu
 
-Ngày 2026-10-08, người dùng xác nhận “giao diện ổn rồi” sau bản 11. Đây là chốt giao diện và workflow trực quan. Tài liệu này tổng hợp thiết kế đã duyệt để chuẩn bị chuyển mockup thành frontend Next.js; tài liệu cần được người dùng đọc và duyệt trước khi lập kế hoạch triển khai.
+Ngày 2026-10-08, người dùng xác nhận “giao diện ổn rồi” sau bản 11, sau đó trả lời “ok” khi được yêu cầu duyệt tài liệu này. Giao diện, workflow trực quan và spec đã được duyệt để lập kế hoạch chuyển mockup thành frontend Next.js.
 
 ORC Studio là văn phòng AI dành cho CEO quản lý công việc của từng dự án/repo. Các phiên CLI được thể hiện bằng nhân vật pixel trong phòng ban, tổ chức theo Supervisor → Lead → Peer. Người dùng phải biết agent đang làm gì, ai phụ trách, dùng CLI/model/reasoning nào, và khi nào cần can thiệp.
 
@@ -30,7 +30,7 @@ Phòng ban có thể mở rộng N phòng, tìm theo tên và cuộn để xem. 
 
 ## Workspace, phòng ban và phiên
 
-Mỗi workspace tương ứng một project/repo được chọn trên server. Next.js, repo và CLI dự kiến chạy trên server; domain phục vụ người dùng và khách online. Đường dẫn repo của UI đầu tiên là dữ liệu mô phỏng, chưa có bộ chọn filesystem thật.
+Mỗi workspace tương ứng một project/repo của một khách hàng riêng, được chọn trên server. Workspace có customerId xác định khách hàng sở hữu; không trộn dữ liệu các khách vào cùng workspace. Một tài khoản khách chỉ được truy cập các workspace thuộc khách hàng đó và đã được cấp phép cho tài khoản; không suy ra quyền truy cập từ vai trò “Khách”. Next.js, repo và CLI dự kiến chạy trên server; domain phục vụ người dùng và khách online. Đường dẫn repo của UI đầu tiên là dữ liệu mô phỏng, chưa có bộ chọn filesystem thật.
 
 Workspace có danh sách phòng ban, phòng làm việc, nhiệm vụ, phiên và lịch sử riêng. Chuyển workspace chỉ chuyển ngữ cảnh, không tự mở hay đóng CLI. Những phiên còn chạy ở workspace khác vẫn tính vào giới hạn tài nguyên toàn server.
 
@@ -52,9 +52,11 @@ Ngoài phòng Supervisor, workspace có hai phòng dữ liệu mặc định. Ha
 | Nhân viên | Không | Có | Không |
 | Khách | Có, chỉ nội dung được chia sẻ | Không | Không |
 
-Trong frontend đầu tiên, bộ chọn vai trò là công cụ xem thử UI, không phải đăng nhập hoặc phân quyền thật. Mọi danh sách, tìm kiếm, đường vào phòng và panel phải tuân theo vai trò đang xem thử. Khách không được nhìn thấy terminal, bản đồ phòng ban, log hoặc báo cáo nội bộ. Không đưa ghi chú thương mại riêng thành đầu vào chung của agent.
+Trong frontend đầu tiên, bộ chọn vai trò là công cụ xem thử UI, không phải đăng nhập hoặc phân quyền thật. Ngữ cảnh khách mô phỏng bao gồm customerId và danh sách workspace được cấp quyền. Bộ chọn workspace, tìm kiếm, danh sách hồ sơ và panel chỉ dùng những workspace được phép; tham chiếu trực tiếp tới ID của workspace/hồ sơ khác cũng phải bị từ chối trong luồng UI. Nếu khách chưa được cấp workspace nào thì hiện trạng thái chưa có quyền truy cập, không tự chọn project của người khác.
 
-Backend sau này phải kiểm tra quyền theo tài khoản/project/phòng/hồ sơ tại server; việc ẩn UI không thay thế kiểm tra quyền đó.
+Mọi danh sách, tìm kiếm, đường vào phòng và panel phải tuân theo vai trò và quyền workspace đang xem thử. Khách không được nhìn thấy terminal, bản đồ phòng ban, log hoặc báo cáo nội bộ. Đổi tài khoản khách/workspace phải xóa lựa chọn hồ sơ/panel cũ nếu không còn được phép. Không đưa ghi chú thương mại riêng thành đầu vào chung của agent.
+
+Backend sau này phải kiểm tra cả customerId và quyền workspace được cấp cho tài khoản, rồi quyền phòng/hồ sơ tại server; việc ẩn UI không thay thế kiểm tra quyền đó. Khách đã đăng nhập không được truy cập workspace khách khác bằng URL, ID hay API.
 
 ## Hồ sơ và tiến độ
 
@@ -136,7 +138,7 @@ Trước khi làm backend, lập spec riêng cho runner, adapter CLI và protoco
 6. Tất cả ghế được căn đúng ở UI, Engineering và phòng đảo hướng; avatar không nhảy vị trí khi đổi chế độ nhìn.
 7. Nhận việc, làm việc, báo cáo, chờ xác nhận và mất kết nối có nhãn rõ ràng; bước chân không chớp/mất sprite.
 8. Click agent chọn đúng terminal/CLI; logo, model và reasoning đồng bộ ở panel/roster/map, xử lý được metadata chưa có.
-9. Hồ sơ phòng khách/phòng họp mở đúng danh sách/chi tiết, mobile sheet sử dụng được; ma trận vai trò được áp dụng ở mọi đường vào UI.
+9. Hồ sơ phòng khách/phòng họp mở đúng danh sách/chi tiết, mobile sheet sử dụng được; ma trận vai trò và quyền workspace được áp dụng ở mọi đường vào UI. Hai workspace của hai khách riêng không lộ tên/hồ sơ qua bộ chọn, tìm kiếm hoặc panel. Khách không có grant thấy trạng thái chưa được cấp workspace.
 10. Bàn giao cùng report ID hai lần không tăng tiến độ hai lần; animation tự hoàn thành không tự tăng tiến độ.
 11. Chuyển phòng/workspace không tạo phiên mới, không để timer cũ đổi ngữ cảnh bất ngờ; session không có việc được thể hiện theo vòng đời đóng rõ ràng.
 12. UI ghi rõ dữ liệu demo, không thực thi CLI, không giả login/RBAC hoặc đo tài nguyên thật.
