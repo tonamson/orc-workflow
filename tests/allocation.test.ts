@@ -106,6 +106,21 @@ describe('session allocation', () => {
 });
 
 describe('session lifecycle and reports', () => {
+  it('returns an accepted approval to working and only enters reporting on an explicit report action', () => {
+    let state = createDemoState();
+    state.tasks['task-09'] = { ...state.tasks['task-09'], status: 'approval', sessionId: 'session-mika' };
+    state = studioReducer(state, { type: 'approval.responded', taskId: 'task-09', accepted: true });
+    expect(state.tasks['task-09'].status).toBe('working');
+    expect(Object.keys(state.reports)).toHaveLength(0);
+
+    state = studioReducer(state, { type: 'task.status', taskId: 'task-09', status: 'reporting' });
+    expect(state.tasks['task-09'].status).toBe('reporting');
+    expect(Object.keys(state.reports)).toHaveLength(0);
+    state = studioReducer(state, { type: 'report.submitted', report: { id: 'report-task-09', workspaceId: 'demo-website', taskId: 'task-09', sessionId: 'session-mika', content: 'Explicit report', status: 'submitted' } });
+    expect(state.reports['report-task-09']?.content).toBe('Explicit report');
+    expect(state.tasks['task-09'].status).toBe('reporting');
+  });
+
   it('keeps closing reservations until a confirmed close and ignores late events', () => {
     const state = createDemoState();
     expect(studioReducer(state, { type: 'session.closed', sessionId: 'session-mika' })).toBe(state);

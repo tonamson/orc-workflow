@@ -176,7 +176,7 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     case 'approval.responded': {
       const task = state.tasks[event.taskId];
       if (!task || task.status !== 'approval') return state;
-      return { ...state, tasks: { ...state.tasks, [task.id]: { ...task, status: event.accepted ? 'reporting' : 'working' } } };
+      return { ...state, tasks: { ...state.tasks, [task.id]: { ...task, status: 'working' } } };
     }
     case 'report.submitted': {
       const task = state.tasks[event.report.taskId]; const session = state.sessions[event.report.sessionId];
