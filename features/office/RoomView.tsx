@@ -8,7 +8,7 @@ import { routeFor } from './motion';
 import { useAgentMotion } from './useAgentMotion';
 import { visibleActors, visibleRecords, visibleRooms } from '../studio/model/selectors';
 import type { AppState, Dispatch, Room as RoomModel, Session, StudioEvent } from '../studio/model/types';
-import { SessionRoster } from '../sessions/SessionRoster';
+import { SessionRoster, WorkspaceSessionRoster } from '../sessions/SessionRoster';
 import { RecordsRoom } from '../records/RecordsRoom';
 import { sessionMetadata } from '../sessions/metadata';
 import { sessionDisplay } from '../sessions/display';
@@ -38,7 +38,7 @@ function actorWorldStyle(room: LayoutRoom, session: Session, layout: { width: nu
   return { left: `${x / layout.width * 100}%`, top: `${y / layout.height * 100}%`, '--actor-width': `${52 / layout.width * 100}cqw`, '--actor-height': `${52 * 300 / 180 / layout.width * 100}cqw` } as React.CSSProperties;
 }
 
-function MotionMarker({ room, session, state, mapLayout, onClick }: { room: LayoutRoom; session: Session; state: AppState; mapLayout?: OfficeLayout; onClick: () => void }) {
+function MotionMarker({ room, session, state, mapLayout, compactLabel = false, onClick }: { room: LayoutRoom; session: Session; state: AppState; mapLayout?: OfficeLayout; compactLabel?: boolean; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
   const [finishedTag, setFinishedTag] = useState('');
   const task = Object.values(state.tasks).find(item => item.sessionId === session.id && item.status !== 'done');
@@ -62,7 +62,7 @@ function MotionMarker({ room, session, state, mapLayout, onClick }: { room: Layo
   const display = sessionDisplay(state, session);
   return <button ref={ref} className={`agent-marker ${session.lifecycle} ${session.role === 'supervisor' ? 'supervisor' : ''}`} style={style} onClick={onClick} aria-label={`Mở phiên ${session.agentName}`}>
     <AgentSprite session={session} pose={phase && !finished ? 'walking' : phase === 'exit' || phase === 'report' ? 'standing' : session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={Boolean(phase && !finished)}/>
-    <span className="agent-marker-label"><span className="agent-identity"><img src={`/cli/${session.provider}.svg`} alt=""/>{session.agentName}</span><small className="agent-meta">{metadata.model} · {metadata.reasoningLabel}: {metadata.reasoningValue}</small><span className={`agent-activity ${display.tone}`}>{display.state}</span></span>
+    <span className={`agent-marker-label ${compactLabel ? 'compact' : ''}`}><span className="agent-identity"><img src={`/cli/${session.provider}.svg`} alt=""/>{session.agentName}</span>{!compactLabel && <small className="agent-meta">{metadata.model} · {metadata.reasoningLabel}: {metadata.reasoningValue}</small>}<span className={`agent-activity ${display.tone}`}>{display.state}</span></span>
   </button>;
 }
 
@@ -92,8 +92,9 @@ export function RoomPreview({ room, state, dispatch }: { room: RoomModel; state:
   if (!layoutRoom) return null;
   return <article className="room-preview-card">
     <span className="room-preview-crop" style={{ aspectRatio: `${layoutRoom.source[2]}/${layoutRoom.source[3]}` }}><ArtworkCrop room={layoutRoom} label={room.name}/>
-      {visibleActors(state, room.id).map(session => <MotionMarker key={session.id} room={layoutRoom} session={session} state={state} onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}/>)}
+      {visibleActors(state, room.id).map(session => <MotionMarker key={session.id} room={layoutRoom} session={session} state={state} compactLabel onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}/>)}
     </span><button className="room-preview-open" onClick={() => dispatch({ type: 'ui.navigate', roomId: room.id })}>{room.name}</button><small>{room.kind === 'work' ? `${visibleActors(state, room.id).length}/3 phiên` : room.kind === 'supervisor' ? 'Điều phối' : 'Phòng dữ liệu'}</small>
+    {(room.kind === 'work' || room.kind === 'supervisor') && <SessionRoster roomId={room.id} state={state} dispatch={dispatch}/>}
   </article>;
 }
 
@@ -111,7 +112,7 @@ export function OfficeView({ state, dispatch }: { state: AppState; dispatch: Dis
   const roomLookup = new Map(layout.rooms.map(room => [room.room.id, room]));
   const matchingRooms = rooms.filter(matchesRoom);
   if (query && !matchingRooms.length) return <div className="empty-state">Không tìm thấy phòng phù hợp.</div>;
-  return <div className="office-building-scroll"><div className="office-building" style={{ aspectRatio: `${layout.width}/${layout.height}` }}>
+  return <div className="office-merged-view"><div className="office-building-scroll"><div className="office-building" style={{ aspectRatio: `${layout.width}/${layout.height}` }}>
     <svg className="office-world-art" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="none" role="img" aria-label="Văn phòng pixel với các phòng thẳng và hành lang liên tục">
       {layout.sections.map((item, index) => <SourceSlice key={`section-${index}`} source={item.source} destination={item.destination}/>)}
       {layout.rooms.filter(room => room.room.kind === 'work').map(room => <SourceSlice key={room.room.id} source={room.source} destination={room.destination} mirrored={room.mirrored}/>)}
@@ -123,8 +124,8 @@ export function OfficeView({ state, dispatch }: { state: AppState; dispatch: Dis
       const actors = visibleActors(state, room.id);
       return <span key={room.id} className="room-layer">
         <button className={`office-room-hit ${room.kind} ${query ? 'search-match' : ''}`} style={style} onClick={() => dispatch({ type: 'ui.navigate', roomId: room.id })} aria-label={`Vào ${room.name}`}><span className="office-room-label">{room.name}<small>{room.kind === 'work' ? `${actors.length}/3 · PHÒNG BAN` : room.kind === 'supervisor' ? 'SUPERVISOR' : room.kind === 'lobby' ? 'PHÒNG KHÁCH' : 'PHÒNG HỌP'}</small></span></button>
-        {actors.map(session => <MotionMarker key={session.id} room={layoutRoom} session={session} state={state} mapLayout={layout} onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}/>)}
+        {actors.map(session => <MotionMarker key={session.id} room={layoutRoom} session={session} state={state} mapLayout={layout} compactLabel onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}/>)}
       </span>;
     })}
-  </div></div>;
+  </div></div>{state.ui.role !== 'client' && <WorkspaceSessionRoster roomIds={matchingRooms.filter(room => room.kind === 'work' || room.kind === 'supervisor').map(room => room.id)} state={state} dispatch={dispatch}/>}</div>;
 }
