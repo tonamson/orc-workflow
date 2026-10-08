@@ -1,14 +1,14 @@
 # ORC Studio validation
 
-Controller review completed on 2026-10-08 against product commit `d163845` on `feat/nextjs-ui`. Luna implemented the product; the controller independently reviewed source, ran the final gates, and operated the browser. The production preview is `http://127.0.0.1:3001/`.
+Controller review completed on 2026-10-08. Workflow/persistence acceptance was reviewed at `d163845`; final readability/scrollbar polish and local integration were reviewed at `00d48ec` on `main`. Luna implemented the product; the controller independently reviewed source, ran the final gates from the main checkout, and operated the browser. The production preview is `http://127.0.0.1:3001/`.
 
 ## Automated checks
 
-Observed environment: Node.js `v26.0.0`, npm `11.12.1`, Next.js `16.4.0`, PostgreSQL `18.6`, TypeORM `1.1.1`.
+Final main-checkout environment: Node.js `v24.19.0`, npm `12.0.2`, Next.js `16.4.0`, PostgreSQL `18.6`, TypeORM `1.1.1`. The initial worktree review also ran under Node.js `v26.0.0` and npm `11.12.1`.
 
 | Command | Final result |
 | --- | --- |
-| `npm test` | 60/60 tests passed across 11 files, including 5 real PostgreSQL integration tests |
+| `npm test` | 61/61 tests passed across 11 files, including 5 real PostgreSQL integration tests |
 | `npm run typecheck` | Passed |
 | `npm run build` | Optimized production build passed; `/api/studio` is dynamic |
 | `git diff --check` | Passed |
@@ -59,3 +59,18 @@ For a write failure, the controller stopped only the ORC database, saved an inte
 PostgreSQL stores all current demo domain information: workspaces, customers/grants, rooms/departments, session configuration and bounded transcripts, tasks/reports, project records/notes, archives, and the append-only event journal. UI role preview, search, navigation, and panel selection remain browser-local. The initial schema uses an aggregate JSONB snapshot plus a transactional event journal; [the database decision](../research/database-decision.md) describes future normalization.
 
 Demo roles are not authentication. The local API returns the aggregate and does not implement production tenant isolation. Secure account/workspace enforcement is required before exposing customer data through a public domain. Native CLI execution, full terminal streaming, uploaded file storage, and resuming the same native conversation remain future integrations. Native conversation IDs are nullable, not fabricated; this implementation does not claim CLI crash-resume support.
+
+
+## Readability, scrollbar polish, and local integration
+
+The user approved local integration into `main`, then requested larger text, less dense content, and scrollbars matching the office theme. Final source commits are `b18620c`, `6adbae7`, `cbe9537`, `f7905bd`, and `00d48ec`.
+
+- Normal navigation/search/form controls use 14–15px text and 40–44px targets; content and record text use 15px, and roster metadata uses 13px. Pixel-map labels remain compact to preserve room/actor proportions; full model/reasoning details are available through the roster and selected-session panel.
+- A fresh page opens on the office with no selected detail panel. Simulator controls sit below the office; full rosters and configuration use closed disclosures with visible chevrons. The selected-session terminal remains visible and follows new output.
+- At 1440×900, the merged map ends at y831.36, before the footer at y848. The simulator starts after the map and roster, without overlapping the artwork. At 390×844, the map is fully visible at y319–539.16; document width is 390, with no horizontal page overflow.
+- Workspace/panel/room-navigation/records scrollbars use thin muted green-gray styling. Terminal scrollbars use dark-green track/thumb colors. Computed styles and screenshots confirm both themes; the 44×44px panel close target remains usable on mobile.
+- The client view has one category filter, in the records navigation. The contract filter returns only the shared contract; the detail remains read-only with 15px content. Simulator/agent controls remain absent from the client view.
+- The controller sent a literal demo prompt to Nova and observed its echo immediately in the visible terminal. This exercises the simulated UI, not native CLI execution.
+- PostgreSQL Compose was recreated from the main checkout against the same named volume; the database is healthy, all migrations remain applied, and the existing 9/12 progress is preserved. Final main gates: 61 tests, typecheck, production build, and diff check passed.
+
+Final screenshots: [clean desktop overview](images/overview-clean.png), [clean mobile overview](images/mobile-clean.png), [visible mobile terminal](images/mobile-terminal-clean.png), and [mobile records filter](images/mobile-records-clean.png). Earlier screenshots document the preceding workflow/artwork review.

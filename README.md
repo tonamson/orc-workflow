@@ -8,7 +8,7 @@ ORC Studio is a Next.js demo of the approved pixel-office workflow. Workspace da
 - npm
 - Docker Compose
 
-Observed for this implementation: Node.js `v26.0.0`, npm `11.12.1`.
+Observed in the final main-checkout validation: Node.js `v24.19.0`, npm `12.0.2`.
 
 ## Run
 
