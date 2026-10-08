@@ -45,10 +45,7 @@ export function assignTask(state: AppState, taskId: string, provider: Provider):
   const department = state.departments[task.departmentId];
   if (!department || department.workspaceId !== task.workspaceId) return { state, outcome: 'queued', sessionId: null };
 
-  const reusable = runningSessions(state).find(session => {
-    const room = state.rooms[session.roomId];
-    return session.workspaceId === task.workspaceId && room?.departmentId === department.id && session.lifecycle === 'active' && session.processConfirmed && hasSkills(session, task.requiredSkills) && !hasOpenTask(state, session.id);
-  });
+  const reusable = runningSessions(state).find(session => canAssignToSession(state, task, session));
   if (reusable) {
     const next = cloneState(state);
     next.tasks[taskId] = { ...task, status: 'assigned', sessionId: reusable.id };
@@ -71,6 +68,12 @@ export function assignTask(state: AppState, taskId: string, provider: Provider):
   if (role === 'lead') next.departments[department.id] = { ...department, leadSessionId: id };
   next.tasks[taskId] = { ...task, status: 'assigned', sessionId: id };
   return { state: next, outcome: 'starting', sessionId: id };
+}
+
+export function canAssignToSession(state: AppState, task: Task, session: Session): boolean {
+  const room = state.rooms[session.roomId];
+  return session.workspaceId === task.workspaceId && room?.workspaceId === task.workspaceId && room.departmentId === task.departmentId
+    && session.lifecycle === 'active' && session.processConfirmed && hasSkills(session, task.requiredSkills) && !hasOpenTask(state, session.id);
 }
 
 export function resizeDemoDepartments(state: AppState, workspaceId: string, count: number): AppState {

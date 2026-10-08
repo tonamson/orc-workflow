@@ -1,4 +1,5 @@
 import type { AppState, Session, StudioEvent } from './types';
+import { canAssignToSession } from './allocation';
 
 function appendStatus(session: Session, text: string, lifecycle: Session['lifecycle'] = session.lifecycle): Session {
   const timestamp = session.lastUpdate + 1;
@@ -48,7 +49,7 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'session.disconnected': {
       const session = state.sessions[event.sessionId];
-      if (!session || !session.processConfirmed) return state;
+      if (!session || !session.processConfirmed || session.lifecycle === 'closing') return state;
       return { ...state, sessions: { ...state.sessions, [session.id]: appendStatus(session, 'Mất kết nối · tiến trình chưa được xác nhận đã dừng.', 'disconnected') } };
     }
     case 'session.reconnected': {
@@ -63,7 +64,7 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'session.close-failed': {
       const session = state.sessions[event.sessionId];
-      if (!session) return state;
+      if (!session || session.lifecycle !== 'closing') return state;
       return { ...state, sessions: { ...state.sessions, [session.id]: { ...appendStatus(session, `Đóng phiên thất bại: ${event.message}`, 'error'), closeError: event.message } } };
     }
     case 'session.closed': {
@@ -79,12 +80,12 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'task.assigned': {
       const task = state.tasks[event.taskId]; const session = state.sessions[event.sessionId];
-      if (!task || !session || task.workspaceId !== session.workspaceId || task.status !== 'queued') return state;
+      if (!task || !session || task.status !== 'queued' || !canAssignToSession(state, task, session)) return state;
       return { ...state, tasks: { ...state.tasks, [task.id]: { ...task, sessionId: session.id, status: 'assigned' } } };
     }
     case 'task.status': {
       const task = state.tasks[event.taskId];
-      if (!task || event.status === 'done') return state;
+      if (!task || task.status === 'done' || event.status === 'done') return state;
       return { ...state, tasks: { ...state.tasks, [task.id]: { ...task, status: event.status } } };
     }
     case 'approval.responded': {
@@ -94,7 +95,7 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'report.submitted': {
       const task = state.tasks[event.report.taskId]; const session = state.sessions[event.report.sessionId];
-      if (!task || !session || event.report.workspaceId !== task.workspaceId || session.workspaceId !== task.workspaceId || event.report.status !== 'submitted' || state.reports[event.report.id]) return state;
+      if (!task || !session || task.status !== 'reporting' || task.sessionId !== session.id || event.report.workspaceId !== task.workspaceId || session.workspaceId !== task.workspaceId || event.report.status !== 'submitted' || state.reports[event.report.id]) return state;
       return { ...state, reports: { ...state.reports, [event.report.id]: event.report } };
     }
     case 'report.reviewed': {

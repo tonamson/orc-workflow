@@ -9,5 +9,5 @@ export function runningSessions(state: AppState): Session[] {
 }
 
 export function visibleActors(state: AppState, roomId: string): Session[] {
-  return roomSessions(state, roomId).filter(session => session.processConfirmed && session.lifecycle !== 'closing');
+  return roomSessions(state, roomId).filter(session => session.processConfirmed);
 }
