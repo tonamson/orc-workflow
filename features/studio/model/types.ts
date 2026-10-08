@@ -11,7 +11,7 @@ export type Session = {
   id: string; workspaceId: string; roomId: string; seatSlot: 0 | 1 | 2; agentName: string; avatar: Avatar;
   role: 'supervisor' | 'lead' | 'peer'; provider: Provider; model: string | null; reasoning: Reasoning;
   skills: string[]; lifecycle: 'starting' | 'active' | 'closing' | 'disconnected' | 'error';
-  processConfirmed: boolean; lastUpdate: number; messages: TerminalMessage[];
+  processConfirmed: boolean; lastUpdate: number; messages: TerminalMessage[]; closeError?: string;
 };
 export type Room = { id: string; workspaceId: string; departmentId: string | null; name: string; kind: 'work' | 'supervisor' | 'lobby' | 'meeting'; template: 'ui' | 'engineering' | 'supervisor' | 'lobby' | 'meeting' };
 export type Department = { id: string; workspaceId: string; name: string; leadSessionId: string | null };
