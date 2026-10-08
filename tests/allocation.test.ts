@@ -116,6 +116,7 @@ describe('session lifecycle and reports', () => {
 
   it('rejects a report from another session or a task that is not reporting', () => {
     const state = createDemoState();
+    state.tasks['task-09'] = { ...state.tasks['task-09'], status: 'reporting' };
     const task = state.tasks['task-09'];
     const wrongSession = { id: 'report-spoof', workspaceId: task.workspaceId, taskId: task.id, sessionId: 'session-rune', content: 'spoof', status: 'submitted' as const };
     expect(studioReducer(state, { type: 'report.submitted', report: wrongSession })).toBe(state);
@@ -126,8 +127,10 @@ describe('session lifecycle and reports', () => {
 
   it('rejects assignments to mismatched, busy, or unconfirmed sessions', () => {
     const state = createDemoState();
-    state.tasks['task-assign'] = { id: 'task-assign', workspaceId: 'demo-website', departmentId: 'dept-ui', requiredSkills: ['frontend'], status: 'queued', sessionId: null, title: 'Assign safely' };
+    state.tasks['task-assign'] = { id: 'task-assign', workspaceId: 'demo-website', departmentId: 'dept-ui', requiredSkills: ['design-review'], status: 'queued', sessionId: null, title: 'Assign safely' };
     expect(studioReducer(state, { type: 'task.assigned', taskId: 'task-assign', sessionId: 'session-sage' })).toBe(state);
+    const validAssignment = studioReducer(state, { type: 'task.assigned', taskId: 'task-assign', sessionId: 'session-atlas' });
+    expect(validAssignment.tasks['task-assign'].status).toBe('assigned');
     const unconfirmed = { ...state, sessions: { ...state.sessions, 'session-atlas': { ...state.sessions['session-atlas'], lifecycle: 'starting' as const, processConfirmed: false } } };
     expect(studioReducer(unconfirmed, { type: 'task.assigned', taskId: 'task-assign', sessionId: 'session-atlas' })).toBe(unconfirmed);
     const busy = { ...state, tasks: { ...state.tasks, 'task-busy': { ...state.tasks['task-09'], id: 'task-busy', status: 'working' as const, sessionId: 'session-atlas' } } };
