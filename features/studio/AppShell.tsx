@@ -51,11 +51,10 @@ export function AppShell({ children, panel }: { children: ReactNode; panel: Reac
       <label className="workspace-select"><span>WORKSPACE · DEMO</span><select aria-label="Workspace demo" value={state.ui.workspaceId ?? ''} onChange={event => dispatch({ type: 'ui.workspace', workspaceId: event.target.value || null })}>
         {options.length ? options.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">Chưa được cấp quyền</option>}
       </select></label>
-      <span className="repo-label">{workspace?.repoPath ?? 'Không có workspace được cấp quyền'}</span>
       <div className="top-right">
         <label className="role-preview"><span>VAI TRÒ · UI</span><select aria-label="Vai trò xem trước" value={state.ui.role} onChange={event => setRole(event.target.value as Role)}><option value="ceo">CEO</option><option value="employee">Nhân viên</option><option value="client">Khách hàng</option></select></label>
         {state.ui.role === 'client' && <label className="role-preview client-preview"><span>TÀI KHOẢN DEMO</span><select aria-label="Tài khoản khách hàng demo" value={state.ui.clientViewerId ?? ''} onChange={event => dispatch({ type: 'ui.client', clientViewerId: event.target.value || null })}>{Object.values(state.clientViewers).map(viewer => <option key={viewer.id} value={viewer.id}>{viewer.id}</option>)}</select></label>}
-        <span className="local"><i className="dot"/>UI DEMO · CHƯA KẾT NỐI CLI</span>
+        <span className="local"><i className="dot"/>DEMO · CHƯA KẾT NỐI CLI</span>
       </div>
     </header>
     <main className="workspace">

@@ -25,5 +25,5 @@ export function WorkspaceSessionRoster({ roomIds, state, dispatch }: { roomIds: 
   if (state.ui.role === 'client') return null;
   const sessions = roomIds.flatMap(roomId => visibleActors(state, roomId));
   if (!sessions.length) return null;
-  return <section className="merged-session-roster" aria-label="Phiên agent và model"><header><strong>Phiên agent</strong><span>Model · reasoning · trạng thái</span></header><div className="room-roster"><RosterRows sessions={sessions} state={state} dispatch={dispatch}/></div></section>;
+  return <details className="merged-session-roster"><summary><strong>Phiên agent · {sessions.length}</strong><span>Model · suy luận · trạng thái</span></summary><div className="room-roster"><RosterRows sessions={sessions} state={state} dispatch={dispatch}/></div></details>;
 }

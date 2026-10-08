@@ -94,7 +94,7 @@ export function RoomPreview({ room, state, dispatch }: { room: RoomModel; state:
     <span className="room-preview-crop" style={{ aspectRatio: `${layoutRoom.source[2]}/${layoutRoom.source[3]}` }}><ArtworkCrop room={layoutRoom} label={room.name}/>
       {visibleActors(state, room.id).map(session => <MotionMarker key={session.id} room={layoutRoom} session={session} state={state} compactLabel onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}/>)}
     </span><button className="room-preview-open" onClick={() => dispatch({ type: 'ui.navigate', roomId: room.id })}>{room.name}</button><small>{room.kind === 'work' ? `${visibleActors(state, room.id).length}/3 phiên` : room.kind === 'supervisor' ? 'Điều phối' : 'Phòng dữ liệu'}</small>
-    {(room.kind === 'work' || room.kind === 'supervisor') && <SessionRoster roomId={room.id} state={state} dispatch={dispatch}/>}
+    {(room.kind === 'work' || room.kind === 'supervisor') && <details className="preview-session-details"><summary>{visibleActors(state, room.id).length} phiên · model và suy luận</summary><SessionRoster roomId={room.id} state={state} dispatch={dispatch}/></details>}
   </article>;
 }
 
