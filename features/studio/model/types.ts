@@ -50,6 +50,7 @@ export type StudioEvent =
   | { type: 'session.close-failed'; sessionId: string; message: string }
   | { type: 'session.closed'; sessionId: string }
   | { type: 'task.assigned'; taskId: string; sessionId: string }
+  | { type: 'task.assign-requested'; taskId: string; provider: Provider }
   | { type: 'task.status'; taskId: string; status: TaskStatus }
   | { type: 'approval.responded'; taskId: string; accepted: boolean }
   | { type: 'report.submitted'; report: Report }

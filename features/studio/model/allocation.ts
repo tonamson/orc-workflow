@@ -76,6 +76,19 @@ export function canAssignToSession(state: AppState, task: Task, session: Session
     && session.lifecycle === 'active' && session.processConfirmed && hasSkills(session, task.requiredSkills) && !hasOpenTask(state, session.id);
 }
 
+export function assignmentQueueReason(state: AppState, taskId: string): string | null {
+  const task = state.tasks[taskId];
+  if (!task || task.status !== 'queued') return null;
+  if (task.workspaceId !== state.ui.workspaceId) return 'Nhiệm vụ thuộc workspace khác.';
+  const department = state.departments[task.departmentId];
+  if (!department || department.workspaceId !== task.workspaceId) return 'Chưa có phòng ban phù hợp.';
+  if (runningSessions(state).length >= state.capacity) return `Đang chờ: đã đạt giới hạn ${state.capacity} phiên trên máy.`;
+  const rooms = Object.values(state.rooms).filter(room => room.departmentId === department.id);
+  if (!rooms.length) return 'Phòng ban chưa có phòng làm việc.';
+  const hasFreeSeat = rooms.some(room => roomSessions(state, room.id).length < 3);
+  return hasFreeSeat ? 'Sẵn sàng: phòng còn chỗ hoặc có phiên đủ skill.' : 'Sẵn sàng: phòng đang đủ 3 chỗ, sẽ tạo phòng bổ sung.';
+}
+
 export function resizeDemoDepartments(state: AppState, workspaceId: string, count: number): AppState {
   const requested = Math.max(0, Math.floor(count));
   const next = cloneState(state);

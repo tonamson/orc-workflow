@@ -37,8 +37,9 @@ export function Studio() {
   const matchingRooms = rooms.filter(room => !search || room.name.toLocaleLowerCase().includes(search));
   const currentRecords = currentRoom ? visibleRecords(state, currentRoom.id).filter(record => (!search || `${record.name} ${record.summary}`.toLocaleLowerCase().includes(search)) && (state.ui.recordFilter === 'all' || record.type === state.ui.recordFilter)) : [];
   const selectedSession = state.ui.selectedSessionId && canSelectSession(state, state.ui.selectedSessionId) ? state.sessions[state.ui.selectedSessionId] : null;
-  const selectedRecord = state.ui.selectedRecordId ? currentRecords.find(record => record.id === state.ui.selectedRecordId) : null;
-  const activeCount = Object.keys(state.sessions).length;
+  const selectedRecord = state.ui.selectedRecordId && currentRoom ? visibleRecords(state, currentRoom.id).find(record => record.id === state.ui.selectedRecordId) : null;
+  const workspaceSessionCount = Object.values(state.sessions).filter(session => session.workspaceId === workspace?.id).length;
+  const serverSessionCount = Object.keys(state.sessions).length;
   const openRecord = (record: ProjectRecord) => dispatch({ type: 'ui.select-record', recordId: record.id });
   const roomCard = (room: Room) => {
     const members = state.ui.role === 'client' ? [] : Object.values(state.sessions).filter(session => session.roomId === room.id && session.processConfirmed);
@@ -56,12 +57,12 @@ export function Studio() {
       <div className="room-sessions">{Object.values(state.sessions).filter(session => session.roomId === currentRoom.id && session.processConfirmed).map(session => <button className="room-session" key={session.id} onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}><strong>{session.agentName}</strong><span>{sessionStatus(session)}</span><small>{session.provider} · {session.model ?? 'Chưa đồng bộ'}</small></button>)}{!Object.values(state.sessions).some(session => session.roomId === currentRoom.id && session.processConfirmed) && <div className="empty-state">0 phiên đang chạy · phòng cấu hình không tự mở CLI.</div>}</div>
     </div> : <div className="record-list">{currentRecords.map(record => <button className="record-row" key={record.id} onClick={() => openRecord(record)}><strong>{record.name}</strong><small>{record.type} · {record.audience === 'shared' ? 'Được chia sẻ' : record.audience === 'ceo' ? 'CEO' : 'Nội bộ'}</small></button>)}{!currentRecords.length && <div className="empty-state">Không có hồ sơ phù hợp.</div>}</div>;
 
-  const selectedPanel = selectedSession ? <SessionPanel sessionId={selectedSession.id} state={state} dispatch={dispatch}/> : selectedRecord ? <RecordPanel key={selectedRecord.id} recordId={selectedRecord.id} state={state} dispatch={dispatch}/> : <div className="empty-state">Chọn một phiên hoặc hồ sơ để xem chi tiết.</div>;
+  const selectedPanel = selectedSession ? <SessionPanel key={selectedSession.id} sessionId={selectedSession.id} state={state} dispatch={dispatch} adapter={adapter}/> : selectedRecord ? <RecordPanel key={selectedRecord.id} recordId={selectedRecord.id} state={state} dispatch={dispatch}/> : <div className="empty-state">Chọn một phiên hoặc hồ sơ để xem chi tiết.</div>;
 
   return <AppShell panel={selectedPanel}>
     {!workspace && state.ui.role === 'client' ? <section className="no-grant"><div className="workspace-head"><div><p className="caps">WORKSPACE ACCESS</p><h1>Chưa được cấp quyền truy cập workspace</h1><p className="subtitle">Tài khoản demo này chưa được cấp workspace nào.</p></div></div><div className="empty-state">Không có dự án hoặc hồ sơ nào được hiển thị.</div></section> : <>
       <header className="workspace-head">
-        <div><h1>{currentRoom?.name ?? (state.ui.role === 'client' ? 'Phòng khách.' : 'Văn phòng.')}</h1><p className="subtitle">{workspace?.name} / {state.ui.role === 'client' ? 'Hồ sơ được chia sẻ' : 'Supervisor → Lead → Peer'}</p><span className="tiny"><i className="dot"/>{state.ui.role === 'client' ? `${currentRecords.length} hồ sơ được chia sẻ` : `${activeCount} phiên đang chạy · toàn workspace`}</span></div>
+        <div><h1>{currentRoom?.name ?? (state.ui.role === 'client' ? 'Phòng khách.' : 'Văn phòng.')}</h1><p className="subtitle">{workspace?.name} / {state.ui.role === 'client' ? 'Hồ sơ được chia sẻ' : 'Supervisor → Lead → Peer'}</p><span className="tiny"><i className="dot"/>{state.ui.role === 'client' ? `${currentRecords.length} hồ sơ được chia sẻ` : `${workspaceSessionCount} phiên workspace · ${serverSessionCount}/${state.capacity} slot máy đang dùng`}</span></div>
         {state.ui.role !== 'client' && <div className="head-controls"><button className={`mode-button ${state.ui.officeMode === 'merged' ? 'active' : ''}`} onClick={() => dispatch({ type: 'ui.mode', mode: 'merged' })}>Văn phòng lớn</button><button className={`mode-button ${state.ui.officeMode === 'cards' ? 'active' : ''}`} onClick={() => dispatch({ type: 'ui.mode', mode: 'cards' })}>Từng phòng</button></div>}
       </header>
       <nav className="room-nav" aria-label="Phòng trong workspace">

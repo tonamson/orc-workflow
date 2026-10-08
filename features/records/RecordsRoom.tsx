@@ -11,7 +11,7 @@ export function RecordsRoom({ roomId, state, dispatch }: { roomId: string; state
   });
   const types = [...new Set(visibleRecords(state, roomId).map(record => record.type))];
   const progress = projectProgress(state, room?.workspaceId ?? '');
-  const reports = Object.values(state.reports).filter(report => report.workspaceId === room?.workspaceId && report.status === 'accepted');
+  const reports = state.ui.role === 'client' ? [] : Object.values(state.reports).filter(report => report.workspaceId === room?.workspaceId && report.status === 'accepted');
   return <section className="records-room">
     <header><span>{room?.kind === 'meeting' ? 'HỌP & HỒ SƠ NỘI BỘ' : 'HỒ SƠ DỰ ÁN'}</span><h2>{room?.name}</h2><p>Tiến độ được tính từ nhiệm vụ đã được chấp thuận.</p></header>
     <div className="progress-card"><div><strong>{progress.percent}%</strong><span>{progress.done}/{progress.total} nhiệm vụ được chấp thuận</span></div><progress value={progress.done} max={progress.total || 1}/></div>

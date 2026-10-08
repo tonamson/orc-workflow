@@ -16,13 +16,16 @@ export function routeFor(room: LayoutRoom, slot: number, phase: 'assign' | 'repo
     return [x, aisle, { x: lead.x + 62, y: lead.y }];
   }
   const doorX = room.mirrored ? left + 18 : left + width - 18;
-  const door = { x: doorX, y: 760 };
-  const aisle = { x: room.mirrored ? left + width - 70 : left + 70, y: 720 };
-  if (phase === 'exit' || (phase === 'report' && leadSlot === null)) return [x, { x: x.x, y: 720 }, aisle, door, { x: door.x, y: 810 }];
-  if (phase === 'assign') return [{ x: door.x, y: 810 }, door, aisle, { x: x.x, y: 720 }, x];
+  const exteriorX = room.mirrored ? left - 18 : left + width + 18;
+  const door = { x: doorX, y: 810 };
+  const exterior = { x: exteriorX, y: 810 };
+  const aisle = { x: left + width / 2, y: 810 };
+  if (phase === 'exit' || (phase === 'report' && leadSlot === null)) return [x, { x: x.x, y: 810 }, aisle, door, exterior];
+  if (phase === 'assign') return [exterior, door, aisle, { x: x.x, y: 810 }, x];
+  if (leadSlot === slot) return [x, { x: x.x, y: 810 }, aisle, door, exterior];
   const lead = seatAnchor(room, leadSlot!);
-  const besideLead = { x: lead.x + (slot < leadSlot! ? 58 : -58), y: lead.y };
-  return [x, { x: x.x, y: 720 }, { x: besideLead.x, y: 720 }, besideLead];
+  const besideLead = { x: lead.x + (slot < leadSlot! ? 58 : -58), y: standingAnchor(room, leadSlot!).y };
+  return [x, { x: x.x, y: 810 }, { x: besideLead.x, y: 810 }, besideLead];
 }
 
 export function startMotion(target: MotionTarget, points: Point[], options: MotionOptions): { cancel(): void; pause(): void; play(): void } {

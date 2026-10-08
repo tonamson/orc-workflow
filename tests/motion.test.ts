@@ -10,7 +10,8 @@ describe('agent motion and demo cleanup', () => {
   it('routes assigned agents through the doorway aisle to a standing seat', () => {
     const points = routeFor(room, 2, 'assign', null);
     expect(points.at(-1)).toEqual({ x: 522, y: 785 });
-    expect(points.some(point => point.y === 720)).toBe(true);
+    expect(points.some(point => point.y === 810)).toBe(true);
+    expect(points.some(point => point.y === 720)).toBe(false);
   });
   it('keeps the Supervisor route inside its own room', () => {
     const supervisor = layoutOffice(Object.values(createDemoState().rooms)).rooms.find(item => item.room.kind === 'supervisor')!;
@@ -19,8 +20,9 @@ describe('agent motion and demo cleanup', () => {
   });
   it('reports beside the Lead and uses the exit when this room has no Lead', () => {
     const report = routeFor(room, 1, 'report', 0);
-    expect(report.at(-1)).not.toEqual({ x: 195, y: 785 });
+    expect(report.at(-1)).toEqual({ x: 137, y: 785 });
     expect(routeFor(room, 1, 'report', null).at(-1)?.y).toBe(810);
+    expect(routeFor(room, 1, 'report', 1).at(-1)?.y).toBe(810);
   });
   it('disposes pending demo events without changing the later workspace', () => {
     vi.useFakeTimers();
@@ -59,7 +61,7 @@ describe('agent motion and demo cleanup', () => {
     vi.runAllTimers();
     const task = state.tasks['task-12'];
     expect(task.status).toBe('assigned');
-    expect(task.sessionId).toMatch(/^session-demo-receive-/);
+    expect(task.sessionId).toBe('session-demo-001');
     expect(state.sessions[task.sessionId!].lifecycle).toBe('active');
     expect(state.sessions[task.sessionId!].processConfirmed).toBe(true);
     adapter.dispose();

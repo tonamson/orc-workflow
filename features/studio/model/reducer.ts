@@ -1,10 +1,18 @@
 import type { AppState, Session, StudioEvent } from './types';
-import { canAssignToSession, resizeDemoDepartments } from './allocation';
+import { assignTask, canAssignToSession, resizeDemoDepartments } from './allocation';
 import { canAccessWorkspace, canSelectSession, visibleRecords, visibleRooms } from './selectors';
+
+function reportBindingIsCurrent(state: AppState, report: AppState['reports'][string]): boolean {
+  const task = state.tasks[report.taskId];
+  const session = state.sessions[report.sessionId];
+  return Boolean(task && session && task.status === 'reporting' && task.sessionId === report.sessionId
+    && task.workspaceId === report.workspaceId && session.workspaceId === report.workspaceId
+    && session.processConfirmed && canAccessWorkspace(state, report.workspaceId));
+}
 
 function appendStatus(session: Session, text: string, lifecycle: Session['lifecycle'] = session.lifecycle): Session {
   const timestamp = session.lastUpdate + 1;
-  return { ...session, lifecycle, lastUpdate: timestamp, messages: [...session.messages, { id: `status-${timestamp}`, kind: 'status', text, timestamp }] };
+  return { ...session, lifecycle, lastUpdate: timestamp, messages: [...session.messages, { id: `status-${timestamp}`, kind: 'status' as const, text, timestamp }].slice(-500) };
 }
 
 function locateSlot(state: AppState, roomId: string): 0 | 1 | 2 | null {
@@ -146,6 +154,12 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
       if (!task || !session || task.status !== 'queued' || !canAssignToSession(state, task, session)) return state;
       return { ...state, tasks: { ...state.tasks, [task.id]: { ...task, sessionId: session.id, status: 'assigned' } } };
     }
+    case 'task.assign-requested': {
+      if (state.ui.role === 'client') return state;
+      const task = state.tasks[event.taskId];
+      if (!task || task.workspaceId !== state.ui.workspaceId) return state;
+      return assignTask(state, task.id, event.provider).state;
+    }
     case 'task.status': {
       const task = state.tasks[event.taskId];
       if (!task || task.status === 'done' || event.status === 'done') return state;
@@ -158,19 +172,18 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'report.submitted': {
       const task = state.tasks[event.report.taskId]; const session = state.sessions[event.report.sessionId];
-      if (!task || !session || task.status !== 'reporting' || task.sessionId !== session.id || event.report.workspaceId !== task.workspaceId || session.workspaceId !== task.workspaceId || event.report.status !== 'submitted' || state.reports[event.report.id]) return state;
+      if (state.ui.role === 'client' || event.report.workspaceId !== state.ui.workspaceId || !task || !session || task.status !== 'reporting' || task.sessionId !== session.id || event.report.workspaceId !== task.workspaceId || session.workspaceId !== task.workspaceId || !session.processConfirmed || event.report.status !== 'submitted' || state.reports[event.report.id]) return state;
       return { ...state, reports: { ...state.reports, [event.report.id]: event.report } };
     }
     case 'report.reviewed': {
       const report = state.reports[event.reportId];
-      if (!report || report.status !== 'submitted') return state;
+      if (state.ui.role !== 'ceo' || !report || report.workspaceId !== state.ui.workspaceId || report.status !== 'submitted' || !reportBindingIsCurrent(state, report)) return state;
       return { ...state, reports: { ...state.reports, [report.id]: { ...report, status: 'reviewed' } } };
     }
     case 'report.accepted': {
       const report = state.reports[event.reportId];
-      if (!report || report.status !== 'reviewed' || state.acceptedReportIds.includes(report.id)) return state;
+      if (state.ui.role !== 'ceo' || !report || report.workspaceId !== state.ui.workspaceId || report.status !== 'reviewed' || state.acceptedReportIds.includes(report.id) || !reportBindingIsCurrent(state, report)) return state;
       const task = state.tasks[report.taskId];
-      if (!task || task.workspaceId !== report.workspaceId) return state;
       return { ...state, reports: { ...state.reports, [report.id]: { ...report, status: 'accepted' } }, acceptedReportIds: [...state.acceptedReportIds, report.id], tasks: { ...state.tasks, [task.id]: { ...task, status: 'done' } } };
     }
     case 'record.updated': {

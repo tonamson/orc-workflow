@@ -66,11 +66,11 @@ function MotionMarker({ room, session, state, mapLayout, onClick }: { room: Layo
   const onMotionFinish = useCallback(() => setFinishedTag(tag), [tag]);
   useAgentMotion(ref, finished ? null : route, finished ? null : phase, false, onMotionFinish);
   const baseStyle = mapLayout ? actorWorldStyle(room, session, mapLayout) : actorStyle(room, session);
-  const exitPoint = finished && phase === 'exit' ? route?.at(-1) : null;
-  const style = exitPoint ? { ...baseStyle, left: `${exitPoint.x}%`, top: `${exitPoint.y}%` } : baseStyle;
+  const restingPoint = finished && (phase === 'exit' || phase === 'report') ? route?.at(-1) : null;
+  const style = restingPoint ? { ...baseStyle, left: `${restingPoint.x}%`, top: `${restingPoint.y}%` } : baseStyle;
   const metadata = sessionMetadata(session);
   return <button ref={ref} className={`agent-marker ${session.lifecycle} ${session.role === 'supervisor' ? 'supervisor' : ''}`} style={style} onClick={onClick} aria-label={`Mở phiên ${session.agentName}`}>
-    <AgentSprite session={session} pose={phase && !finished ? 'walking' : session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={Boolean(phase && !finished)}/>
+    <AgentSprite session={session} pose={phase && !finished ? 'walking' : phase === 'exit' || phase === 'report' ? 'standing' : session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={Boolean(phase && !finished)}/>
     <span className="agent-marker-label"><img src={`/cli/${session.provider}.svg`} alt=""/>{session.agentName}<small>{metadata.model} · {metadata.reasoningLabel}: {metadata.reasoningValue}</small></span>
   </button>;
 }
@@ -99,11 +99,11 @@ export function RoomView({ roomId, state, dispatch }: { roomId: string; state: A
 export function RoomPreview({ room, state, dispatch }: { room: RoomModel; state: AppState; dispatch: Dispatch<StudioEvent> }) {
   const layoutRoom = layoutOffice(visibleRooms(state)).rooms.find(candidate => candidate.room.id === room.id);
   if (!layoutRoom) return null;
-  return <button className="room-preview-card" onClick={() => dispatch({ type: 'ui.navigate', roomId: room.id })}>
+  return <article className="room-preview-card">
     <span className="room-preview-crop" style={{ aspectRatio: `${layoutRoom.source[2]}/${layoutRoom.source[3]}` }}><ArtworkCrop room={layoutRoom} label={room.name}/>
-      {visibleActors(state, room.id).map(session => <span className={`preview-actor ${session.role === 'supervisor' ? 'supervisor' : ''}`} key={session.id} style={actorStyle(layoutRoom, session)}><AgentSprite session={session} pose={session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={false}/></span>)}
-    </span><span className="room-preview-name">{room.name}</span><small>{room.kind === 'work' ? `${visibleActors(state, room.id).length}/3 phiên` : room.kind === 'supervisor' ? 'Điều phối' : 'Phòng dữ liệu'}</small>
-  </button>;
+      {visibleActors(state, room.id).map(session => <MotionMarker key={session.id} room={layoutRoom} session={session} state={state} onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}/>)}
+    </span><button className="room-preview-open" onClick={() => dispatch({ type: 'ui.navigate', roomId: room.id })}>{room.name}</button><small>{room.kind === 'work' ? `${visibleActors(state, room.id).length}/3 phiên` : room.kind === 'supervisor' ? 'Điều phối' : 'Phòng dữ liệu'}</small>
+  </article>;
 }
 
 export function OfficeView({ state, dispatch }: { state: AppState; dispatch: Dispatch<StudioEvent> }) {

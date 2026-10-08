@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assignTask, resizeDemoDepartments } from '../features/studio/model/allocation';
+import { assignTask, assignmentQueueReason, resizeDemoDepartments } from '../features/studio/model/allocation';
 import { roomSessions, runningSessions, visibleActors } from '../features/studio/model/selectors';
 import { createDemoState } from '../features/studio/model/seed';
 import { studioReducer } from '../features/studio/model/reducer';
@@ -24,6 +24,7 @@ describe('session allocation', () => {
     expect(new Set(roomSessions(next, 'room-ui').map(session => session.seatSlot))).toEqual(new Set([0, 1, 2]));
     expect(allocated.filter(session => session.role === 'lead')).toHaveLength(1);
     expect(next.departments['dept-ui'].leadSessionId).toBe('session-atlas');
+    expect(assignmentQueueReason(next, 'task-overflow-b')).toBeNull();
   });
 
   it('reuses a skill-matched available session without increasing session count', () => {
@@ -33,6 +34,21 @@ describe('session allocation', () => {
     expect(result.outcome).toBe('reused');
     expect(Object.keys(result.state.sessions)).toHaveLength(5);
     expect(result.sessionId).toBe('session-atlas');
+  });
+
+  it('routes reducer allocation through the canonical allocator into physical overflow', () => {
+    let state = createDemoState();
+    state.capacity = 10;
+    state.tasks['task-extra-a'] = { id: 'task-extra-a', workspaceId: 'demo-website', departmentId: 'dept-ui', requiredSkills: ['new-skill'], status: 'queued', sessionId: null, title: 'Extra A' };
+    state.tasks['task-extra-b'] = { id: 'task-extra-b', workspaceId: 'demo-website', departmentId: 'dept-ui', requiredSkills: ['new-skill'], status: 'queued', sessionId: null, title: 'Extra B' };
+    state = studioReducer(state, { type: 'task.assign-requested', taskId: 'task-extra-a', provider: 'claude' });
+    state = studioReducer(state, { type: 'task.assign-requested', taskId: 'task-extra-b', provider: 'claude' });
+    expect(state.tasks['task-extra-a'].sessionId).toBe('session-demo-001');
+    expect(state.tasks['task-extra-b'].sessionId).toBe('session-demo-002');
+    expect(roomSessions(state, 'room-ui').map(session => session.seatSlot)).toEqual([0, 1, 2]);
+    const overflow = state.sessions['session-demo-002'];
+    expect(state.rooms[overflow.roomId].departmentId).toBe('dept-ui');
+    expect(overflow.seatSlot).toBe(0);
   });
 
   it('queues work when all six lifecycle reservations occupy capacity', () => {
@@ -46,6 +62,7 @@ describe('session allocation', () => {
     expect(result.sessionId).toBeNull();
     expect(Object.keys(result.state.sessions)).toHaveLength(6);
     expect(runningSessions(result.state)).toHaveLength(6);
+    expect(assignmentQueueReason(result.state, 'task-capacity')).toContain('giới hạn 6');
   });
 
   it('64 empty departments do not create CLI sessions', () => {
@@ -124,6 +141,21 @@ describe('session lifecycle and reports', () => {
     const notReporting = { ...state, tasks: { ...state.tasks, 'task-09': { ...task, status: 'queued' as const } } };
     const sameSession = { ...wrongSession, id: 'report-queued', sessionId: task.sessionId! };
     expect(studioReducer(notReporting, { type: 'report.submitted', report: sameSession })).toBe(notReporting);
+  });
+
+  it('rejects review/acceptance outside the active CEO workspace and after reassignment', () => {
+    let state = createDemoState();
+    state.tasks['task-09'] = { ...state.tasks['task-09'], status: 'reporting' };
+    const report = { id: 'bound-report', workspaceId: 'demo-website', taskId: 'task-09', sessionId: 'session-mika', content: 'Done', status: 'submitted' as const };
+    state = studioReducer(state, { type: 'report.submitted', report });
+    const employee = studioReducer(state, { type: 'ui.role', role: 'employee' });
+    expect(studioReducer(employee, { type: 'report.reviewed', reportId: report.id })).toBe(employee);
+    const wrongWorkspace = { ...state, ui: { ...state.ui, workspaceId: 'demo-empty' } };
+    expect(studioReducer(wrongWorkspace, { type: 'report.reviewed', reportId: report.id })).toBe(wrongWorkspace);
+    const reviewed = studioReducer(state, { type: 'report.reviewed', reportId: report.id });
+    const reassigned = { ...reviewed, tasks: { ...reviewed.tasks, 'task-09': { ...reviewed.tasks['task-09'], sessionId: 'session-atlas', status: 'assigned' as const } } };
+    expect(studioReducer(reassigned, { type: 'report.accepted', reportId: report.id })).toBe(reassigned);
+    expect(reassigned.acceptedReportIds).toEqual([]);
   });
 
   it('rejects assignments to mismatched, busy, or unconfirmed sessions', () => {
