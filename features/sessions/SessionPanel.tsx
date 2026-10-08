@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { AppState, Dispatch, Provider, StudioEvent } from '../studio/model/types';
 import { makePromptEvent, skillSuggestions } from './skills';
 import { sessionMetadata } from './metadata';
@@ -11,6 +11,11 @@ import { formatSessionUpdate, sessionDisplay } from './display';
 export function SessionPanel({ sessionId, state, dispatch, adapter }: { sessionId: string; state: AppState; dispatch: Dispatch<StudioEvent>; adapter: DemoAdapter }) {
   const session = state.sessions[sessionId];
   const [text, setText] = useState('');
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript) transcript.scrollTop = transcript.scrollHeight;
+  }, [session?.messages]);
   if (!session) return <div className="empty-state">Phiên này đã đóng hoặc không còn khả dụng.</div>;
   const metadata = sessionMetadata(session);
   const canSend = session.processConfirmed && session.lifecycle === 'active';
@@ -41,9 +46,9 @@ export function SessionPanel({ sessionId, state, dispatch, adapter }: { sessionI
       <label className="config-provider">Model<select value={session.model ?? ''} onChange={event => dispatch({ type: 'session.config', sessionId, provider: session.provider, model: event.target.value || null, reasoning: session.reasoning })} disabled={!session.processConfirmed}><option value="">Chưa đồng bộ</option>{modelOptions[session.provider].map(model => <option key={model} value={model}>{model}</option>)}</select></label>
       {session.provider === 'codex' && <label className="config-provider">Effort<select value={session.reasoning.kind === 'effort' ? String(session.reasoning.value) : ''} onChange={event => changeEffort(event.target.value)} disabled={!session.processConfirmed}><option value="">Chưa đồng bộ</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>}
     </details>
-    <details className="session-secondary"><summary>Lịch sử terminal mô phỏng · {session.messages.length}</summary>
-      <div className="panel-terminal" aria-live="polite">{session.messages.slice(-500).map(message => <div key={message.id} className={`terminal-message ${message.kind}`}>{message.kind === 'input' ? '$ ' : 'MÔ PHỎNG · '}{message.text}</div>)}</div>
-    </details>
+    <section className="session-transcript"><h3>Terminal mô phỏng · {session.messages.length} dòng</h3>
+      <div ref={transcriptRef} className="panel-terminal" aria-live="polite">{session.messages.map(message => <div key={message.id} className={`terminal-message ${message.kind}`}>{message.kind === 'input' ? '$ ' : 'MÔ PHỎNG · '}{message.text}</div>)}</div>
+    </section>
     <form className="prompt-composer" onSubmit={send}><label htmlFor="session-prompt">Gửi prompt tới {session.agentName}</label><textarea id="session-prompt" value={text} onChange={event => setText(event.target.value)} disabled={!canSend} placeholder={canSend ? 'Nhập prompt…' : 'Phiên chưa sẵn sàng'} rows={4}/>
       {suggestions.length > 0 && <div className="skill-suggestions" aria-label="Gợi ý skill mô phỏng">{suggestions.map(item => <button type="button" key={item.id} title={item.description} onClick={() => setText(item.command + ' ')}>{item.command}<small>{item.label}</small></button>)}</div>}
       <button type="submit" disabled={!canSend || !text.trim()}>Gửi prompt</button>
