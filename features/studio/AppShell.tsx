@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, type ReactNode } from 'react';
-import { canAccessWorkspace, visibleWorkspaces } from './model/selectors';
+import { canAccessWorkspace, canSelectSession, visibleWorkspaces } from './model/selectors';
 import type { Role } from './model/types';
 import { useStudio } from './StudioProvider';
 
@@ -31,9 +31,12 @@ export function AppShell({ children, panel }: { children: ReactNode; panel: Reac
   return <div className={`shell ${panelOpen ? '' : 'panel-collapsed'}`}>
     <nav className="rail" aria-label="Điều hướng chính">
       <div className="orc-mark" aria-label="ORC"><i/><i/><i/><i/><i/><i/><i/><i/><i/></div>
-      <button className="current" aria-label="Văn phòng" title="Văn phòng" onClick={() => dispatch({ type: 'ui.navigate', roomId: null })}>▦</button>
-      <button aria-label="Phòng hồ sơ" title="Hồ sơ" onClick={() => dispatch({ type: 'ui.navigate', roomId: state.ui.role === 'client' ? state.ui.roomId : `${state.ui.workspaceId}-lobby` })}>▤</button>
-      <button aria-label="Phiên agent" title="Phiên agent" onClick={() => { const session = Object.values(state.sessions).find(item => canAccessWorkspace(state, item.workspaceId)); if (session) dispatch({ type: 'ui.select-session', sessionId: session.id }); }}>♙</button>
+      <button className="current" aria-label={state.ui.role === 'client' ? 'Hồ sơ được chia sẻ' : 'Văn phòng'} title={state.ui.role === 'client' ? 'Hồ sơ được chia sẻ' : 'Văn phòng'} onClick={() => dispatch({ type: 'ui.navigate', roomId: state.ui.role === 'client' ? state.ui.roomId : null })}>{state.ui.role === 'client' ? '▤' : '▦'}</button>
+      {state.ui.role !== 'client' && <button aria-label="Phòng hồ sơ" title="Hồ sơ" onClick={() => dispatch({ type: 'ui.navigate', roomId: `${state.ui.workspaceId}-${state.ui.role === 'employee' ? 'meeting' : 'lobby'}` })}>▤</button>}
+      {state.ui.role !== 'client' && (() => {
+        const session = Object.values(state.sessions).find(item => item.workspaceId === state.ui.workspaceId && canSelectSession(state, item.id));
+        return <button aria-label="Phiên agent" title={session ? 'Phiên agent' : 'Workspace này chưa có phiên'} disabled={!session} onClick={() => { if (session) dispatch({ type: 'ui.select-session', sessionId: session.id }); }}>♙</button>;
+      })()}
       <span className="spacer"/>
       <span className="user" aria-label="Tài khoản mô phỏng">OR</span>
     </nav>
@@ -52,8 +55,8 @@ export function AppShell({ children, panel }: { children: ReactNode; panel: Reac
     <main className="workspace">
       {children}
       <nav className="mobile-nav" aria-label="Điều hướng di động">
-        <button onClick={() => dispatch({ type: 'ui.navigate', roomId: null })}>Văn phòng</button>
-        <button onClick={() => dispatch({ type: 'ui.navigate', roomId: state.ui.role === 'client' ? state.ui.roomId : `${state.ui.workspaceId}-lobby` })}>Hồ sơ</button>
+        <button onClick={() => dispatch({ type: 'ui.navigate', roomId: state.ui.role === 'client' ? state.ui.roomId : null })}>{state.ui.role === 'client' ? 'Hồ sơ' : 'Văn phòng'}</button>
+        {state.ui.role !== 'client' && <button onClick={() => dispatch({ type: 'ui.navigate', roomId: `${state.ui.workspaceId}-${state.ui.role === 'employee' ? 'meeting' : 'lobby'}` })}>Hồ sơ</button>}
         <button onClick={() => dispatch({ type: 'ui.panel', open: !panelOpen })}>Chi tiết</button>
       </nav>
     </main>

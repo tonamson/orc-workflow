@@ -37,7 +37,7 @@ export function visibleRecords(state: AppState, roomId: string): ProjectRecord[]
 export function canSelectSession(state: AppState, sessionId: string): boolean {
   if (state.ui.role === 'client') return false;
   const session = state.sessions[sessionId];
-  return Boolean(session && session.workspaceId === state.ui.workspaceId && canAccessWorkspace(state, session.workspaceId));
+  return Boolean(session && session.workspaceId === state.ui.workspaceId && canAccessWorkspace(state, session.workspaceId) && visibleRooms(state).some(room => room.id === session.roomId));
 }
 
 export function roomSessions(state: AppState, roomId: string): Session[] {
