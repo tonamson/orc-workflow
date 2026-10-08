@@ -20,6 +20,17 @@ export function visibleRooms(state: AppState): Room[] {
     if (state.ui.role === 'client') return room.kind === 'lobby';
     if (state.ui.role === 'employee') return room.kind !== 'lobby';
     return true;
+  }).sort((left, right) => {
+    const fixedOrder: Record<Room['kind'], number> = { supervisor: 0, lobby: 1, meeting: 2, work: 3 };
+    const kindOrder = fixedOrder[left.kind] - fixedOrder[right.kind];
+    if (kindOrder) return kindOrder;
+    if (left.kind !== 'work' || right.kind !== 'work') return left.id.localeCompare(right.id, undefined, { numeric: true });
+    const departmentOrder = (id: string | null) => id === 'dept-ui' ? '0' : id === 'dept-engineering' ? '1' : `2-${id ?? ''}`;
+    const byDepartment = departmentOrder(left.departmentId).localeCompare(departmentOrder(right.departmentId), undefined, { numeric: true });
+    if (byDepartment) return byDepartment;
+    const isBaseRoom = (room: Room) => room.id === `room-${room.template}` || room.id.endsWith('-room-01');
+    const baseOrder = Number(!isBaseRoom(left)) - Number(!isBaseRoom(right));
+    return baseOrder || left.id.localeCompare(right.id, undefined, { numeric: true });
   });
 }
 

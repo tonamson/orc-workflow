@@ -38,6 +38,7 @@ export type StudioEvent =
   | { type: 'ui.select-record'; recordId: string | null }
   | { type: 'ui.search'; search: string }
   | { type: 'ui.record-filter'; filter: string }
+  | { type: 'persistence.hydrate'; state: AppState }
   | { type: 'ui.departments-resize'; count: number }
   | { type: 'ui.department-create'; name: string }
   | { type: 'demo.overflow-reset' }

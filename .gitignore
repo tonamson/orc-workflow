@@ -1,4 +1,7 @@
 .worktrees/
+.env
+.env.*
+!.env.example
 .superpowers/
 node_modules/
 .next/

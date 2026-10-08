@@ -23,6 +23,7 @@ function locateSlot(state: AppState, roomId: string): 0 | 1 | 2 | null {
 
 export function studioReducer(state: AppState, event: StudioEvent): AppState {
   switch (event.type) {
+    case 'persistence.hydrate': return { ...event.state, ui: state.ui };
     case 'ui.workspace':
       if (!event.workspaceId || !canAccessWorkspace(state, event.workspaceId)) return state;
       return { ...state, ui: { ...state.ui, workspaceId: event.workspaceId, roomId: state.ui.role === 'client' ? `${event.workspaceId}-lobby` : null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };

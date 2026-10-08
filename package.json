@@ -3,23 +3,34 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": "^22.12.0 || ^24.0.0 || >=26.0.0" },
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate": "tsx scripts/db/migrate.ts up",
+    "db:revert": "tsx scripts/db/migrate.ts down",
+    "db:status": "tsx scripts/db/migrate.ts status",
+    "test:integration": "vitest run tests/persistence.integration.test.ts"
   },
   "dependencies": {
+    "dotenv": "16.6.1",
     "next": "16.4.0",
+    "pg": "8.23.1",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "reflect-metadata": "0.2.2",
+    "typeorm": "1.1.1"
   },
   "devDependencies": {
     "@types/node": "26.0.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vitest": "5.0.3"
   }
