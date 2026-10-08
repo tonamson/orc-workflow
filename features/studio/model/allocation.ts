@@ -89,6 +89,40 @@ export function assignmentQueueReason(state: AppState, taskId: string): string |
   return hasFreeSeat ? 'Sẵn sàng: phòng còn chỗ hoặc có phiên đủ skill.' : 'Sẵn sàng: phòng đang đủ 3 chỗ, sẽ tạo phòng bổ sung.';
 }
 
+export function isOverflowDemoScenario(state: AppState): boolean {
+  return Object.keys(state.tasks).some(id => id.startsWith('task-overflow-demo-'));
+}
+
+export function createOverflowDemoScenario(state: AppState): AppState {
+  if (state.ui.role !== 'ceo' || state.ui.workspaceId !== 'demo-website') return state;
+  const workspaceId = 'demo-website';
+  const department = state.departments['dept-ui'];
+  const baseRoom = state.rooms['room-ui'];
+  if (!department || !baseRoom) return state;
+  let next = cloneState(state);
+  next.capacity = Math.max(6, next.capacity);
+  next.sessions = {};
+  next.archives = {};
+  next.reports = {};
+  next.acceptedReportIds = [];
+  next.departments = Object.fromEntries(Object.entries(next.departments).filter(([, item]) => item.workspaceId !== workspaceId || item.id === department.id));
+  next.departments[department.id] = { ...department, leadSessionId: null };
+  next.rooms = Object.fromEntries(Object.entries(next.rooms).filter(([id, room]) => room.workspaceId !== workspaceId || room.kind !== 'work' || id === baseRoom.id));
+  next.tasks = Object.fromEntries(Object.entries(next.tasks).filter(([, task]) => task.workspaceId !== workspaceId));
+  for (let index = 1; index <= 4; index += 1) {
+    const id = `task-overflow-demo-${String(index).padStart(2, '0')}`;
+    next.tasks[id] = { id, workspaceId, departmentId: department.id, requiredSkills: ['overflow-demo'], status: 'queued', sessionId: null, title: `Kiểm tra phòng overflow ${index}` };
+  }
+  for (let index = 1; index <= 4; index += 1) {
+    const id = `task-overflow-demo-${String(index).padStart(2, '0')}`;
+    const result = assignTask(next, id, 'codex');
+    if (result.outcome !== 'starting' || !result.sessionId) return state;
+    next = result.state;
+  }
+  next.ui = { ...next.ui, workspaceId, roomId: null, officeMode: 'merged', selectedSessionId: null, selectedRecordId: null, panelOpen: false, search: '', recordFilter: 'all' };
+  return next;
+}
+
 export function resizeDemoDepartments(state: AppState, workspaceId: string, count: number): AppState {
   const requested = Math.max(0, Math.floor(count));
   const next = cloneState(state);

@@ -1,5 +1,6 @@
 import type { AppState, Session, StudioEvent } from './types';
-import { assignTask, canAssignToSession, resizeDemoDepartments } from './allocation';
+import { assignTask, canAssignToSession, createOverflowDemoScenario, isOverflowDemoScenario, resizeDemoDepartments } from './allocation';
+import { createDemoState } from './seed';
 import { canAccessWorkspace, canSelectSession, visibleRecords, visibleRooms } from './selectors';
 
 function reportBindingIsCurrent(state: AppState, report: AppState['reports'][string]): boolean {
@@ -94,6 +95,12 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
         rooms: { ...state.rooms, [roomId]: { id: roomId, workspaceId, departmentId: id, name, kind: 'work', template } },
       };
     }
+    case 'demo.overflow-reset': {
+      const scenario = createOverflowDemoScenario(state);
+      if (scenario === state) return state;
+      return Object.values(scenario.sessions).reduce((next, session) => studioReducer(next, { type: 'session.started', sessionId: session.id }), scenario);
+    }
+    case 'demo.seed-reset': return state.ui.role === 'ceo' && isOverflowDemoScenario(state) ? createDemoState() : state;
     case 'session.start-requested': {
       const room = state.rooms[event.roomId];
       if (state.sessions[event.id] || state.archives[event.id] || !room || room.workspaceId !== event.workspaceId || Object.keys(state.sessions).length >= state.capacity) return state;

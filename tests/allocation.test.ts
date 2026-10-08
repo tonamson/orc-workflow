@@ -3,6 +3,7 @@ import { assignTask, assignmentQueueReason, resizeDemoDepartments } from '../fea
 import { roomSessions, runningSessions, visibleActors } from '../features/studio/model/selectors';
 import { createDemoState } from '../features/studio/model/seed';
 import { studioReducer } from '../features/studio/model/reducer';
+import { layoutOffice } from '../features/office/geometry';
 
 describe('session allocation', () => {
   it('keeps a department lead unique and allocates a fourth session to an overflow room', () => {
@@ -49,6 +50,20 @@ describe('session allocation', () => {
     const overflow = state.sessions['session-demo-002'];
     expect(state.rooms[overflow.roomId].departmentId).toBe('dept-ui');
     expect(overflow.seatSlot).toBe(0);
+  });
+
+  it('opens an isolated four-session overflow scenario through canonical assignment', () => {
+    const scenario = studioReducer(createDemoState(), { type: 'demo.overflow-reset' });
+    const rooms = Object.values(scenario.rooms).filter(room => room.departmentId === 'dept-ui');
+    const counts = rooms.map(room => roomSessions(scenario, room.id).length);
+    expect(counts).toEqual([3, 1]);
+    expect(Object.values(scenario.sessions)).toHaveLength(4);
+    expect(Object.values(scenario.sessions).every(session => session.processConfirmed && session.lifecycle === 'active')).toBe(true);
+    expect(Object.values(scenario.tasks).filter(task => task.workspaceId === 'demo-website')).toHaveLength(4);
+    expect(Object.values(scenario.tasks).filter(task => task.workspaceId === 'demo-website' && task.status === 'done')).toHaveLength(0);
+    const layout = layoutOffice(Object.values(scenario.rooms));
+    const overflow = layout.rooms.find(room => room.room.id !== 'room-ui' && room.room.departmentId === 'dept-ui');
+    expect(overflow?.mirrored).toBe(true);
   });
 
   it('queues work when all six lifecycle reservations occupy capacity', () => {

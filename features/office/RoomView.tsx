@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { AgentSprite } from './AgentSprite';
+import { ArtworkCrop } from './ArtworkCrop';
 import { layoutOffice, pointPercent, seatAnchor, type Box, type LayoutRoom, type OfficeLayout, type Point } from './geometry';
 import { routeFor } from './motion';
 import { useAgentMotion } from './useAgentMotion';
@@ -10,18 +11,7 @@ import type { AppState, Dispatch, Room as RoomModel, Session, StudioEvent } from
 import { SessionRoster } from '../sessions/SessionRoster';
 import { RecordsRoom } from '../records/RecordsRoom';
 import { sessionMetadata } from '../sessions/metadata';
-
-function mirroredArt(room: LayoutRoom) {
-  const [sx, sy, sw, sh] = room.source;
-  return room.mirrored ? <g transform={`translate(${2 * sx + sw} 0) scale(-1 1)`}><image href="/art/office.png" x="0" y="0" width="1586" height="992" imageRendering="pixelated" /></g> : <image href="/art/office.png" x="0" y="0" width="1586" height="992" imageRendering="pixelated" />;
-}
-
-export function ArtworkCrop({ room, label }: { room: LayoutRoom; label: string }) {
-  const [x, y, width, height] = room.source;
-  return <svg className="room-artwork" viewBox={`${x} ${y} ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`Nội thất pixel của ${label}`}>
-    {mirroredArt(room)}
-  </svg>;
-}
+import { sessionDisplay } from '../sessions/display';
 
 function actorStyle(room: LayoutRoom, session: Session): React.CSSProperties {
   const point = pointPercent(room, seatAnchor(room, session.seatSlot));
@@ -69,9 +59,10 @@ function MotionMarker({ room, session, state, mapLayout, onClick }: { room: Layo
   const restingPoint = finished && (phase === 'exit' || phase === 'report') ? route?.at(-1) : null;
   const style = restingPoint ? { ...baseStyle, left: `${restingPoint.x}%`, top: `${restingPoint.y}%` } : baseStyle;
   const metadata = sessionMetadata(session);
+  const display = sessionDisplay(state, session);
   return <button ref={ref} className={`agent-marker ${session.lifecycle} ${session.role === 'supervisor' ? 'supervisor' : ''}`} style={style} onClick={onClick} aria-label={`Mở phiên ${session.agentName}`}>
     <AgentSprite session={session} pose={phase && !finished ? 'walking' : phase === 'exit' || phase === 'report' ? 'standing' : session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={Boolean(phase && !finished)}/>
-    <span className="agent-marker-label"><img src={`/cli/${session.provider}.svg`} alt=""/>{session.agentName}<small>{metadata.model} · {metadata.reasoningLabel}: {metadata.reasoningValue}</small></span>
+    <span className="agent-marker-label"><span className="agent-identity"><img src={`/cli/${session.provider}.svg`} alt=""/>{session.agentName}</span><small className="agent-meta">{metadata.model} · {metadata.reasoningLabel}: {metadata.reasoningValue}</small><span className={`agent-activity ${display.tone}`}>{display.state}</span></span>
   </button>;
 }
 

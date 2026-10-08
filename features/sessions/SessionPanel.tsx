@@ -6,6 +6,7 @@ import { makePromptEvent, skillSuggestions } from './skills';
 import { sessionMetadata } from './metadata';
 import type { DemoAdapter } from '../demo/adapter';
 import { AgentSprite } from '../office/AgentSprite';
+import { formatSessionUpdate, sessionDisplay } from './display';
 
 export function SessionPanel({ sessionId, state, dispatch, adapter }: { sessionId: string; state: AppState; dispatch: Dispatch<StudioEvent>; adapter: DemoAdapter }) {
   const session = state.sessions[sessionId];
@@ -14,10 +15,9 @@ export function SessionPanel({ sessionId, state, dispatch, adapter }: { sessionI
   const metadata = sessionMetadata(session);
   const canSend = session.processConfirmed && session.lifecycle === 'active';
   const suggestions = skillSuggestions(session.provider, text.startsWith('$') || text.startsWith('/') ? text.split(/\s/, 1)[0] : '');
-  const task = Object.values(state.tasks).find(item => item.sessionId === sessionId);
-  const report = Object.values(state.reports).find(item => item.sessionId === sessionId && (!task || item.taskId === task.id));
-  const taskStatus: Record<string, string> = { queued: 'Đang chờ giao việc', assigned: 'Đã nhận việc', working: 'Đang làm việc', approval: 'Chờ duyệt', blocked: 'Bị chặn', reporting: 'Đang bàn giao', done: 'Đã hoàn tất' };
-  const sessionStatus: Record<typeof session.lifecycle, string> = { starting: 'Đang khởi động', active: 'Đang hoạt động', closing: 'Đang yêu cầu đóng', disconnected: 'Mất kết nối · tiến trình còn tồn tại', error: 'Đóng phiên gặp lỗi' };
+  const display = sessionDisplay(state, session);
+  const task = display.task;
+  const report = task ? Object.values(state.reports).filter(item => item.sessionId === sessionId && item.taskId === task.id).at(-1) : null;
   const send = (event: FormEvent) => {
     event.preventDefault();
     const prompt = makePromptEvent(state, sessionId, text);
@@ -27,8 +27,8 @@ export function SessionPanel({ sessionId, state, dispatch, adapter }: { sessionI
   const changeEffort = (value: string) => dispatch({ type: 'session.config', sessionId, provider: session.provider, model: session.model, reasoning: value ? { kind: 'effort', value } : { kind: 'unknown' } });
   const modelOptions: Record<Provider, string[]> = { codex: ['gpt-5-codex'], claude: ['claude-sonnet'], gemini: ['gemini-2.5-pro'], opencode: ['openai/gpt-5'] };
   return <div className="session-panel">
-    <div className="session-panel-identity"><AgentSprite session={session} pose={session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={false}/><div><h2>{session.agentName}</h2><div className="panel-tag">{session.role === 'supervisor' ? 'Supervisor' : session.role === 'lead' ? 'Lead' : 'Peer'} · {sessionStatus[session.lifecycle]}</div></div><img src={`/cli/${session.provider}.svg`} alt={`${session.provider} CLI`}/></div>
-    <dl><div><dt>Nhiệm vụ</dt><dd>{task?.title ?? 'Chưa gán nhiệm vụ'}</dd></div><div><dt>Trạng thái nhiệm vụ</dt><dd>{task ? taskStatus[task.status] : 'Không có'}</dd></div><div><dt>Cập nhật mô phỏng</dt><dd>{session.lastUpdate ? `Sự kiện #${session.lastUpdate}` : 'Chưa có cập nhật'}</dd></div></dl>
+    <div className="session-panel-identity"><AgentSprite session={session} pose={session.role === 'supervisor' ? 'standing' : 'seated'} direction="right" animated={false}/><div><h2>{session.agentName}</h2><div className={`panel-tag ${display.tone}`}>{display.role} · {display.state}</div></div><img src={`/cli/${session.provider}.svg`} alt={`${session.provider} CLI`}/></div>
+    <dl><div><dt>Nhiệm vụ</dt><dd>{task?.title ?? 'Chưa gán nhiệm vụ'}</dd></div><div><dt>Trạng thái nhiệm vụ</dt><dd>{display.taskState}</dd></div><div><dt>Cập nhật mô phỏng</dt><dd>{formatSessionUpdate(session.lastUpdate)}</dd></div></dl>
     {task?.status === 'assigned' && <button className="session-action" onClick={() => dispatch({ type: 'task.status', taskId: task.id, status: 'working' })}>Bắt đầu làm việc</button>}
     {task?.status === 'working' && <button className="session-action" onClick={() => dispatch({ type: 'task.status', taskId: task.id, status: 'approval' })}>Yêu cầu duyệt</button>}
     {task?.status === 'approval' && state.ui.role === 'ceo' && <div className="session-actions"><button onClick={() => adapter.respond(task.id, true)}>Duyệt yêu cầu</button><button onClick={() => adapter.respond(task.id, false)}>Từ chối</button></div>}
