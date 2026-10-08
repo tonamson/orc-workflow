@@ -27,6 +27,6 @@ export function sessionDisplay(state: AppState, session: Session): { role: strin
 }
 
 export function formatSessionUpdate(timestamp: number): string {
-  if (!timestamp) return 'Chưa có cập nhật';
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Chưa đồng bộ';
   return new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp));
 }

@@ -16,6 +16,7 @@ export function createDemoAdapter(getState: () => AppState, dispatch: Dispatch<S
       const state = getState();
       const current = state.sessions[sessionId];
       if (!current) return;
+      const origin = { workspaceId: state.ui.workspaceId, roomId: state.ui.roomId, selectedSessionId: state.ui.selectedSessionId, role: state.ui.role };
       if (current.lifecycle === 'starting') {
         schedule(current.workspaceId, 650, latest => {
           if (latest.sessions[sessionId]?.lifecycle === 'starting') dispatch({ type: 'session.started', sessionId });
@@ -30,7 +31,10 @@ export function createDemoAdapter(getState: () => AppState, dispatch: Dispatch<S
         const assignedSessionId = latest.tasks[task.id]?.sessionId;
         if (!assignedSessionId) return;
         if (latest.sessions[assignedSessionId]?.lifecycle === 'starting') dispatch({ type: 'session.started', sessionId: assignedSessionId });
-        dispatch({ type: 'ui.select-session', sessionId: assignedSessionId });
+        if (latest.ui.workspaceId === origin.workspaceId && latest.ui.roomId === origin.roomId
+          && latest.ui.selectedSessionId === origin.selectedSessionId && latest.ui.role === origin.role) {
+          dispatch({ type: 'ui.select-session', sessionId: assignedSessionId });
+        }
       });
     },
     submitReport(sessionId: string) {

@@ -67,6 +67,39 @@ describe('agent motion and demo cleanup', () => {
     adapter.dispose();
     vi.useRealTimers();
   });
+  it('confirms a received session after a room switch without redirecting the view', () => {
+    vi.useFakeTimers();
+    let state = createDemoState();
+    state = studioReducer(state, { type: 'ui.navigate', roomId: 'room-ui' });
+    state = studioReducer(state, { type: 'ui.select-session', sessionId: 'session-mika' });
+    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
+    adapter.receive('session-mika');
+    const task = Object.values(state.tasks).find(item => item.status === 'assigned' && item.sessionId !== 'session-mika');
+    expect(task).toBeDefined();
+    const assignedSessionId = task!.sessionId!;
+
+    state = studioReducer(state, { type: 'ui.navigate', roomId: 'room-engineering' });
+    vi.advanceTimersByTime(650);
+    expect(state.sessions[assignedSessionId].lifecycle).toBe('active');
+    expect(state.sessions[assignedSessionId].processConfirmed).toBe(true);
+    expect(state.ui.roomId).toBe('room-engineering');
+    expect(state.ui.selectedSessionId).toBeNull();
+    adapter.dispose();
+    vi.useRealTimers();
+  });
+  it('submits a scheduled report after navigating to another room in the same workspace', () => {
+    vi.useFakeTimers();
+    let state = createDemoState();
+    state.tasks['task-09'] = { ...state.tasks['task-09'], status: 'working', sessionId: 'session-mika' };
+    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
+    adapter.submitReport('session-mika');
+    state = studioReducer(state, { type: 'ui.navigate', roomId: 'room-engineering' });
+    vi.advanceTimersByTime(700);
+    expect(state.ui.roomId).toBe('room-engineering');
+    expect(state.reports['report-task-09']?.sessionId).toBe('session-mika');
+    adapter.dispose();
+    vi.useRealTimers();
+  });
   it('cancels Web Animations without completing the lifecycle', () => {
     const onFinish = vi.fn(); const cancel = vi.fn();
     const target = { animate: vi.fn(() => ({ cancel, pause: vi.fn(), play: vi.fn(), finished: Promise.resolve() })) } as unknown as MotionTarget;

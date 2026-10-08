@@ -40,6 +40,7 @@ describe('session metadata and prompts', () => {
     state.tasks['task-live-atlas'] = { id: 'task-live-atlas', workspaceId: 'demo-website', departmentId: 'dept-ui', requiredSkills: [], status: 'approval', sessionId: 'session-atlas', title: 'Current approval' };
     expect(taskForSession(state, 'session-atlas')?.id).toBe('task-live-atlas');
     expect(formatSessionUpdate(state.sessions['session-atlas'].lastUpdate)).not.toMatch(/Sự kiện #/);
+    expect(formatSessionUpdate(0)).toBe('Chưa đồng bộ');
     expect(sessionDisplay(state, state.sessions['session-atlas']).state).toBe('Chờ duyệt');
     expect(sessionDisplay(state, { ...state.sessions['session-atlas'], lifecycle: 'disconnected' }).state).toContain('Mất kết nối');
   });
