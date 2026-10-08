@@ -61,6 +61,6 @@ export function createDemoState(): AppState {
       'client-none': { id: 'client-none', customerId: 'customer-c', allowedWorkspaceIds: [] },
     },
     departments, rooms, sessions, tasks, reports: {}, records, archives: {}, acceptedReportIds: [], capacity: 6,
-    ui: { workspaceId: 'demo-website', clientViewerId: null, role: 'ceo', roomId: null, officeMode: 'merged', selectedSessionId: 'session-nova', selectedRecordId: null, panelOpen: true, search: '', recordFilter: 'all' },
+    ui: { workspaceId: 'demo-website', clientViewerId: null, role: 'ceo', roomId: null, officeMode: 'merged', selectedSessionId: null, selectedRecordId: null, panelOpen: false, search: '', recordFilter: 'all' },
   };
 }

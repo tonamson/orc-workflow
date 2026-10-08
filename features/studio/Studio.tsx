@@ -46,18 +46,18 @@ export function Studio() {
         {rooms.map(room => <button key={room.id} className={currentRoom?.id === room.id ? 'active' : ''} onClick={() => dispatch({ type: 'ui.navigate', roomId: room.id })}>{room.name}</button>)}
       </nav>
       <div className="workspace-tools">
-        <input value={state.ui.search} onChange={event => dispatch({ type: 'ui.search', search: event.target.value })} placeholder={state.ui.role === 'client' ? 'Tìm hồ sơ được chia sẻ…' : 'Tìm phòng hoặc hồ sơ…'} aria-label="Tìm kiếm" />
+        <input value={state.ui.search} onChange={event => dispatch({ type: 'ui.search', search: event.target.value })} placeholder={state.ui.role === 'client' ? 'Tìm hồ sơ được chia sẻ…' : 'Tìm phòng, hồ sơ…'} aria-label="Tìm kiếm" />
         {state.ui.role !== 'client' && <div className="view-switch" role="group" aria-label="Kiểu hiển thị văn phòng"><button className={state.ui.officeMode === 'merged' ? 'active' : ''} onClick={() => dispatch({ type: 'ui.mode', mode: 'merged' })}>Bản đồ</button><button className={state.ui.officeMode === 'cards' ? 'active' : ''} onClick={() => dispatch({ type: 'ui.mode', mode: 'cards' })}>Từng phòng</button></div>}
         {state.ui.role === 'client' && <select aria-label="Lọc loại hồ sơ" value={state.ui.recordFilter} onChange={event => dispatch({ type: 'ui.record-filter', filter: event.target.value })}><option value="all">Tất cả hồ sơ</option><option value="contract">Hợp đồng</option><option value="minutes">Biên bản</option><option value="progress">Tiến độ</option><option value="delivery">Bàn giao</option></select>}
       </div>
+      <section className="office-content">
+        <OfficeView state={state} dispatch={dispatch}/>
+      </section>
       {state.ui.role !== 'client' && <details className="simulation-tools"><summary>Công cụ mô phỏng</summary><div className="simulation-tools-content">
         <div className="department-create"><label htmlFor="department-count">Số phòng ban</label><select id="department-count" aria-label="Số phòng ban demo" value={String(departmentCount)} onChange={event => dispatch({ type: 'ui.departments-resize', count: Number(event.target.value) })}>{departmentSizes.map(count => <option key={count} value={count}>{count}</option>)}</select><button className="workspace-action" onClick={() => setCreatingDepartment(value => !value)}>+ Thêm phòng ban</button></div>
         {creatingDepartment && <div className="department-create-form"><input value={departmentName} onChange={event => setDepartmentName(event.target.value)} placeholder="Tên phòng mới" aria-label="Tên phòng ban mới"/><button className="workspace-action" onClick={() => { dispatch({ type: 'ui.department-create', name: departmentName }); setDepartmentName(''); setCreatingDepartment(false); }}>Tạo phòng</button></div>}
         <DemoControls state={state} dispatch={dispatch} adapter={adapter}/>
       </div></details>}
-      <section className="office-content">
-        <OfficeView state={state} dispatch={dispatch}/>
-      </section>
     </>}</>}
   </AppShell>;
 }

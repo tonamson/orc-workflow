@@ -3,6 +3,13 @@ import { createDemoState } from '../features/studio/model/seed';
 import { studioReducer } from '../features/studio/model/reducer';
 
 describe('initial demo state', () => {
+  it('starts on the office with no selected detail panel', () => {
+    const state = createDemoState();
+    expect(state.ui.selectedSessionId).toBeNull();
+    expect(state.ui.selectedRecordId).toBeNull();
+    expect(state.ui.panelOpen).toBe(false);
+  });
+
   it('seeds two separate workspaces with explicit sessions and rooms', () => {
     const state = createDemoState();
     const firstRooms = Object.values(state.rooms).filter(room => room.workspaceId === 'demo-website');
