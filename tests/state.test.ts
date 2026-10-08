@@ -28,4 +28,13 @@ describe('initial demo state', () => {
     const next = studioReducer(state, { type: 'ui.navigate', roomId: 'meeting-demo' });
     expect(Object.keys(next.sessions)).toHaveLength(5);
   });
+
+  it('creating an empty department adds a room but no CLI session', () => {
+    const state = createDemoState();
+    const next = studioReducer(state, { type: 'ui.department-create', name: 'Content Lab' });
+    expect(Object.keys(next.sessions)).toHaveLength(5);
+    const created = Object.values(next.departments).find(department => department.name === 'Content Lab');
+    expect(created).toBeDefined();
+    expect(Object.values(next.rooms).some(room => room.departmentId === created?.id)).toBe(true);
+  });
 });

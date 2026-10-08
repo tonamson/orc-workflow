@@ -72,6 +72,20 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
       if (state.ui.role === 'client' || !state.ui.workspaceId) return state;
       return resizeDemoDepartments(state, state.ui.workspaceId, event.count);
     }
+    case 'ui.department-create': {
+      const name = event.name.trim(); const workspaceId = state.ui.workspaceId;
+      if (!name || !workspaceId || state.ui.role === 'client') return state;
+      const departments = Object.values(state.departments).filter(department => department.workspaceId === workspaceId);
+      let index = 1; let id = `${workspaceId}-created-${String(index).padStart(2, '0')}`;
+      while (state.departments[id]) { index += 1; id = `${workspaceId}-created-${String(index).padStart(2, '0')}`; }
+      const template = departments.length % 2 ? 'engineering' : 'ui';
+      const roomId = `${id}-room-01`;
+      return {
+        ...state,
+        departments: { ...state.departments, [id]: { id, workspaceId, name, leadSessionId: null } },
+        rooms: { ...state.rooms, [roomId]: { id: roomId, workspaceId, departmentId: id, name, kind: 'work', template } },
+      };
+    }
     case 'session.start-requested': {
       const room = state.rooms[event.roomId];
       if (state.sessions[event.id] || state.archives[event.id] || !room || room.workspaceId !== event.workspaceId || Object.keys(state.sessions).length >= state.capacity) return state;

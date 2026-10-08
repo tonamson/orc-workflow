@@ -39,6 +39,7 @@ export type StudioEvent =
   | { type: 'ui.search'; search: string }
   | { type: 'ui.record-filter'; filter: string }
   | { type: 'ui.departments-resize'; count: number }
+  | { type: 'ui.department-create'; name: string }
   | { type: 'session.start-requested'; id: string; workspaceId: string; roomId: string; agentName: string; avatar: Avatar; provider: Provider; model: string | null; reasoning: Reasoning; skills: string[] }
   | { type: 'session.started'; sessionId: string }
   | { type: 'session.config'; sessionId: string; provider: Provider; model: string | null; reasoning: Reasoning }
