@@ -48,7 +48,6 @@ export function Studio() {
       <div className="workspace-tools">
         <input value={state.ui.search} onChange={event => dispatch({ type: 'ui.search', search: event.target.value })} placeholder={state.ui.role === 'client' ? 'Tìm hồ sơ được chia sẻ…' : 'Tìm phòng, hồ sơ…'} aria-label="Tìm kiếm" />
         {state.ui.role !== 'client' && <div className="view-switch" role="group" aria-label="Kiểu hiển thị văn phòng"><button className={state.ui.officeMode === 'merged' ? 'active' : ''} onClick={() => dispatch({ type: 'ui.mode', mode: 'merged' })}>Bản đồ</button><button className={state.ui.officeMode === 'cards' ? 'active' : ''} onClick={() => dispatch({ type: 'ui.mode', mode: 'cards' })}>Từng phòng</button></div>}
-        {state.ui.role === 'client' && <select aria-label="Lọc loại hồ sơ" value={state.ui.recordFilter} onChange={event => dispatch({ type: 'ui.record-filter', filter: event.target.value })}><option value="all">Tất cả hồ sơ</option><option value="contract">Hợp đồng</option><option value="minutes">Biên bản</option><option value="progress">Tiến độ</option><option value="delivery">Bàn giao</option></select>}
       </div>
       <section className="office-content">
         <OfficeView state={state} dispatch={dispatch}/>
