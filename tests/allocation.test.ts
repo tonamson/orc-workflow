@@ -65,7 +65,7 @@ describe('session allocation', () => {
   });
 
   it('closing one session leaves other seat assignments unchanged', () => {
-    const state = createDemoState();
+    const state = studioReducer(createDemoState(), { type: 'session.close-requested', sessionId: 'session-atlas' });
     const seat = state.sessions['session-mika'].seatSlot;
     const closing = studioReducer(state, { type: 'session.closed', sessionId: 'session-atlas' });
     expect(closing.sessions['session-atlas']).toBeUndefined();
@@ -76,6 +76,7 @@ describe('session allocation', () => {
 describe('session lifecycle and reports', () => {
   it('keeps closing reservations until a confirmed close and ignores late events', () => {
     const state = createDemoState();
+    expect(studioReducer(state, { type: 'session.closed', sessionId: 'session-mika' })).toBe(state);
     const requested = studioReducer(state, { type: 'session.close-requested', sessionId: 'session-mika' });
     expect(requested.sessions['session-mika'].lifecycle).toBe('closing');
     expect(requested.sessions['session-mika'].seatSlot).toBe(1);

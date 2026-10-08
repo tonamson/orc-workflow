@@ -34,6 +34,13 @@ export function visibleRecords(state: AppState, roomId: string): ProjectRecord[]
   });
 }
 
+export function projectProgress(state: AppState, workspaceId: string): { done: number; total: number; percent: number } {
+  const tasks = Object.values(state.tasks).filter(task => task.workspaceId === workspaceId);
+  const done = tasks.filter(task => task.status === 'done').length;
+  const total = tasks.length;
+  return { done, total, percent: total ? Math.round(done / total * 100) : 0 };
+}
+
 export function canSelectSession(state: AppState, sessionId: string): boolean {
   if (state.ui.role === 'client') return false;
   const session = state.sessions[sessionId];

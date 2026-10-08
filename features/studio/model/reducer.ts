@@ -108,7 +108,7 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     case 'session.message': {
       const session = state.sessions[event.sessionId];
       if (!session || !session.processConfirmed || session.lifecycle === 'closing') return state;
-      return { ...state, sessions: { ...state.sessions, [session.id]: { ...session, lastUpdate: event.message.timestamp, messages: [...session.messages, event.message] } } };
+      return { ...state, sessions: { ...state.sessions, [session.id]: { ...session, lastUpdate: event.message.timestamp, messages: [...session.messages, event.message].slice(-500) } } };
     }
     case 'session.disconnected': {
       const session = state.sessions[event.sessionId];
@@ -132,7 +132,7 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'session.closed': {
       const session = state.sessions[event.sessionId];
-      if (!session) return state;
+      if (!session || session.lifecycle !== 'closing' && session.lifecycle !== 'error') return state;
       const sessions = { ...state.sessions }; delete sessions[event.sessionId];
       const departments = { ...state.departments };
       Object.values(departments).forEach(department => { if (department.leadSessionId === event.sessionId) departments[department.id] = { ...department, leadSessionId: null }; });

@@ -14,6 +14,12 @@ export function AppShell({ children, panel }: { children: ReactNode; panel: Reac
   const panelOpen = state.ui.panelOpen;
 
   useEffect(() => {
+    if (window.matchMedia('(max-width: 700px)').matches && panelOpen) dispatch({ type: 'ui.panel', open: false });
+  // Only set the initial mobile sheet state. Users can open it afterward.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     if (panelOpen && !priorOpen.current && document.activeElement instanceof HTMLElement) returnFocus.current = document.activeElement;
     if (!panelOpen && priorOpen.current) returnFocus.current?.focus();
     priorOpen.current = panelOpen;

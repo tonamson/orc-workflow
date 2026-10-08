@@ -2,12 +2,18 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { canSelectSession, visibleRecords, visibleRooms } from './model/selectors';
 import type { ProjectRecord, Room, Session } from './model/types';
 import { useStudio } from './StudioProvider';
 import { AppShell } from './AppShell';
 import { OfficeView } from '../office/RoomView';
+import { createDemoAdapter } from '../demo/adapter';
+import { DemoControls } from '../demo/DemoControls';
+import { SessionPanel } from '../sessions/SessionPanel';
+import { RecordPanel } from '../records/RecordPanel';
+import '../records/records.css';
+import '../sessions/sessions.css';
 import './studio.css';
 import '../office/office.css';
 
@@ -19,6 +25,11 @@ function sessionStatus(session: Session): string {
 export function Studio() {
   const { state, dispatch } = useStudio();
   const [departmentName, setDepartmentName] = useState('');
+  const [creatingDepartment, setCreatingDepartment] = useState(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const adapter = useMemo(() => createDemoAdapter(() => stateRef.current, dispatch), [dispatch, state.ui.workspaceId]);
+  useEffect(() => () => adapter.dispose(), [adapter]);
   const workspace = state.ui.workspaceId ? state.workspaces[state.ui.workspaceId] : null;
   const rooms = visibleRooms(state);
   const currentRoom = rooms.find(room => room.id === state.ui.roomId) ?? null;
@@ -45,14 +56,7 @@ export function Studio() {
       <div className="room-sessions">{Object.values(state.sessions).filter(session => session.roomId === currentRoom.id && session.processConfirmed).map(session => <button className="room-session" key={session.id} onClick={() => dispatch({ type: 'ui.select-session', sessionId: session.id })}><strong>{session.agentName}</strong><span>{sessionStatus(session)}</span><small>{session.provider} · {session.model ?? 'Chưa đồng bộ'}</small></button>)}{!Object.values(state.sessions).some(session => session.roomId === currentRoom.id && session.processConfirmed) && <div className="empty-state">0 phiên đang chạy · phòng cấu hình không tự mở CLI.</div>}</div>
     </div> : <div className="record-list">{currentRecords.map(record => <button className="record-row" key={record.id} onClick={() => openRecord(record)}><strong>{record.name}</strong><small>{record.type} · {record.audience === 'shared' ? 'Được chia sẻ' : record.audience === 'ceo' ? 'CEO' : 'Nội bộ'}</small></button>)}{!currentRecords.length && <div className="empty-state">Không có hồ sơ phù hợp.</div>}</div>;
 
-  const selectedPanel = selectedSession ? <>
-    <h2>{selectedSession.agentName}</h2><div className="panel-tag">{selectedSession.role.toLocaleUpperCase()} · {selectedSession.provider.toLocaleUpperCase()} · {sessionStatus(selectedSession)}</div>
-    <p>{selectedSession.model ?? 'Chưa đồng bộ'} · {'value' in selectedSession.reasoning ? `${selectedSession.reasoning.kind}: ${selectedSession.reasoning.value}` : selectedSession.reasoning.kind === 'unknown' ? 'Chưa đồng bộ' : 'Không hỗ trợ'}</p>
-    <h3>Terminal mô phỏng</h3><div className="panel-terminal">{selectedSession.messages.map(message => `${message.kind === 'input' ? '$ ' : ''}${message.text}`).join('\n') || 'Chưa có hoạt động terminal.'}</div>
-  </> : selectedRecord ? <>
-    <h2>{selectedRecord.name}</h2><div className="panel-tag">{selectedRecord.type.toLocaleUpperCase()} · {selectedRecord.audience.toLocaleUpperCase()}</div>
-    <p>{selectedRecord.summary}</p><h3>Nội dung</h3><p>{selectedRecord.content}</p><p className="panel-tag">Bản demo · chưa lưu tệp thật</p>
-  </> : <div className="empty-state">Chọn một phiên hoặc hồ sơ để xem chi tiết.</div>;
+  const selectedPanel = selectedSession ? <SessionPanel sessionId={selectedSession.id} state={state} dispatch={dispatch}/> : selectedRecord ? <RecordPanel key={selectedRecord.id} recordId={selectedRecord.id} state={state} dispatch={dispatch}/> : <div className="empty-state">Chọn một phiên hoặc hồ sơ để xem chi tiết.</div>;
 
   return <AppShell panel={selectedPanel}>
     {!workspace && state.ui.role === 'client' ? <section className="no-grant"><div className="workspace-head"><div><p className="caps">WORKSPACE ACCESS</p><h1>Chưa được cấp quyền truy cập workspace</h1><p className="subtitle">Tài khoản demo này chưa được cấp workspace nào.</p></div></div><div className="empty-state">Không có dự án hoặc hồ sơ nào được hiển thị.</div></section> : <>
@@ -68,8 +72,10 @@ export function Studio() {
         <input value={state.ui.search} onChange={event => dispatch({ type: 'ui.search', search: event.target.value })} placeholder={state.ui.role === 'client' ? 'Tìm hồ sơ được chia sẻ…' : 'Tìm phòng hoặc hồ sơ…'} aria-label="Tìm kiếm" />
         {state.ui.role === 'client' && <select aria-label="Lọc loại hồ sơ" value={state.ui.recordFilter} onChange={event => dispatch({ type: 'ui.record-filter', filter: event.target.value })}><option value="all">Tất cả hồ sơ</option><option value="contract">Hợp đồng</option><option value="minutes">Biên bản</option><option value="progress">Tiến độ</option><option value="delivery">Bàn giao</option></select>}
         {state.ui.role !== 'client' && <select aria-label="Số phòng ban demo" value={String(Object.values(state.departments).filter(department => department.workspaceId === workspace?.id).length)} onChange={event => dispatch({ type: 'ui.departments-resize', count: Number(event.target.value) })}><option value="0">0 phòng ban</option><option value="2">2 phòng ban</option><option value="8">8 phòng ban</option><option value="24">24 phòng ban</option><option value="64">64 phòng ban</option></select>}
-        {state.ui.role !== 'client' && <><input value={departmentName} onChange={event => setDepartmentName(event.target.value)} placeholder="Tên phòng mới" aria-label="Tên phòng ban mới"/><button className="workspace-action" onClick={() => { dispatch({ type: 'ui.department-create', name: departmentName }); setDepartmentName(''); }}>Tạo phòng</button></>}
+        {state.ui.role !== 'client' && <button className="workspace-action" onClick={() => setCreatingDepartment(value => !value)}>+ Phòng ban</button>}
       </div>
+      {creatingDepartment && state.ui.role !== 'client' && <div className="department-create"><input value={departmentName} onChange={event => setDepartmentName(event.target.value)} placeholder="Tên phòng mới" aria-label="Tên phòng ban mới"/><button className="workspace-action" onClick={() => { dispatch({ type: 'ui.department-create', name: departmentName }); setDepartmentName(''); setCreatingDepartment(false); }}>Tạo phòng</button></div>}
+      {state.ui.role !== 'client' && <DemoControls state={state} dispatch={dispatch} adapter={adapter}/>}
       <section className="office-content">
         {state.ui.role !== 'client' ? <OfficeView state={state} dispatch={dispatch}/> : clientContent}
       </section>
