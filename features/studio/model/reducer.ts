@@ -1,5 +1,6 @@
 import type { AppState, Session, StudioEvent } from './types';
-import { canAssignToSession } from './allocation';
+import { canAssignToSession, resizeDemoDepartments } from './allocation';
+import { canAccessWorkspace, canSelectSession, visibleRecords, visibleRooms } from './selectors';
 
 function appendStatus(session: Session, text: string, lifecycle: Session['lifecycle'] = session.lifecycle): Session {
   const timestamp = session.lastUpdate + 1;
@@ -14,15 +15,63 @@ function locateSlot(state: AppState, roomId: string): 0 | 1 | 2 | null {
 export function studioReducer(state: AppState, event: StudioEvent): AppState {
   switch (event.type) {
     case 'ui.workspace':
-      if (!event.workspaceId || !state.workspaces[event.workspaceId]) return state;
-      return { ...state, ui: { ...state.ui, workspaceId: event.workspaceId, roomId: null, selectedSessionId: null, selectedRecordId: null } };
-    case 'ui.navigate': return { ...state, ui: { ...state.ui, roomId: event.roomId, selectedRecordId: null } };
-    case 'ui.role': return { ...state, ui: { ...state.ui, role: event.role, selectedSessionId: event.role === 'client' ? null : state.ui.selectedSessionId } };
-    case 'ui.client': return { ...state, ui: { ...state.ui, clientViewerId: event.clientViewerId } };
+      if (!event.workspaceId || !canAccessWorkspace(state, event.workspaceId)) return state;
+      return { ...state, ui: { ...state.ui, workspaceId: event.workspaceId, roomId: state.ui.role === 'client' ? `${event.workspaceId}-lobby` : null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
+    case 'ui.navigate': {
+      if (event.roomId !== null && !visibleRooms(state).some(room => room.id === event.roomId)) return state;
+      return { ...state, ui: { ...state.ui, roomId: event.roomId, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
+    }
+    case 'ui.role': {
+      if (event.role === 'client') {
+        const viewer = state.ui.clientViewerId ? state.clientViewers[state.ui.clientViewerId] : null;
+        const candidate = viewer && Object.values(state.workspaces).find(workspace => workspace.id === state.ui.workspaceId && workspace.customerId === viewer.customerId && viewer.allowedWorkspaceIds.includes(workspace.id));
+        const clientViewerId = viewer ? viewer.id : 'client-a';
+        const activeViewer = viewer ?? state.clientViewers[clientViewerId];
+        const available = activeViewer ? Object.values(state.workspaces).filter(workspace => workspace.customerId === activeViewer.customerId && activeViewer.allowedWorkspaceIds.includes(workspace.id)) : [];
+        const workspace = candidate ?? available[0];
+        return { ...state, ui: { ...state.ui, role: 'client', clientViewerId, workspaceId: workspace?.id ?? null, roomId: workspace ? `${workspace.id}-lobby` : null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
+      }
+      const workspaceId = state.ui.workspaceId && state.workspaces[state.ui.workspaceId] ? state.ui.workspaceId : 'demo-website';
+      const next: AppState = { ...state, ui: { ...state.ui, role: event.role, workspaceId, roomId: state.ui.roomId, selectedSessionId: state.ui.selectedSessionId, selectedRecordId: state.ui.selectedRecordId } };
+      const currentRoom = state.ui.roomId ? state.rooms[state.ui.roomId] : null;
+      if (!currentRoom || currentRoom.workspaceId !== workspaceId || (event.role === 'employee' && currentRoom.kind === 'lobby')) {
+        next.ui.roomId = event.role === 'employee' ? `${workspaceId}-meeting` : null;
+      }
+      const selectedSessionId = state.ui.selectedSessionId;
+      if (selectedSessionId && !canSelectSession(next, selectedSessionId)) next.ui.selectedSessionId = null;
+      const selectedRecordId = state.ui.selectedRecordId;
+      const selectedRecord = selectedRecordId ? state.records[selectedRecordId] : null;
+      if (!selectedRecord || !visibleRecords(next, selectedRecord.roomId).some(record => record.id === selectedRecordId)) next.ui.selectedRecordId = null;
+      next.ui.panelOpen = Boolean(next.ui.selectedSessionId || next.ui.selectedRecordId) && state.ui.panelOpen;
+      return next;
+    }
+    case 'ui.client': {
+      if (!event.clientViewerId || !state.clientViewers[event.clientViewerId]) return state;
+      if (state.ui.role !== 'client') return { ...state, ui: { ...state.ui, clientViewerId: event.clientViewerId } };
+      const viewer = state.clientViewers[event.clientViewerId];
+      const available = Object.values(state.workspaces).filter(workspace => workspace.customerId === viewer.customerId && viewer.allowedWorkspaceIds.includes(workspace.id));
+      const workspace = available.find(candidate => candidate.id === state.ui.workspaceId) ?? available[0];
+      return { ...state, ui: { ...state.ui, clientViewerId: viewer.id, workspaceId: workspace?.id ?? null, roomId: workspace ? `${workspace.id}-lobby` : null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
+    }
     case 'ui.mode': return { ...state, ui: { ...state.ui, officeMode: event.mode } };
     case 'ui.panel': return { ...state, ui: { ...state.ui, panelOpen: event.open } };
+    case 'ui.select-session': {
+      if (event.sessionId === null) return { ...state, ui: { ...state.ui, selectedSessionId: null, panelOpen: false } };
+      if (!canSelectSession(state, event.sessionId)) return state;
+      return { ...state, ui: { ...state.ui, roomId: state.sessions[event.sessionId].roomId, selectedSessionId: event.sessionId, selectedRecordId: null, panelOpen: true } };
+    }
+    case 'ui.select-record': {
+      if (event.recordId === null) return { ...state, ui: { ...state.ui, selectedRecordId: null, panelOpen: false } };
+      const record = state.records[event.recordId];
+      if (!record || !visibleRecords(state, record.roomId).some(candidate => candidate.id === event.recordId)) return state;
+      return { ...state, ui: { ...state.ui, roomId: record.roomId, selectedSessionId: null, selectedRecordId: record.id, panelOpen: true } };
+    }
     case 'ui.search': return { ...state, ui: { ...state.ui, search: event.search } };
     case 'ui.record-filter': return { ...state, ui: { ...state.ui, recordFilter: event.filter } };
+    case 'ui.departments-resize': {
+      if (state.ui.role === 'client' || !state.ui.workspaceId) return state;
+      return resizeDemoDepartments(state, state.ui.workspaceId, event.count);
+    }
     case 'session.start-requested': {
       const room = state.rooms[event.roomId];
       if (state.sessions[event.id] || state.archives[event.id] || !room || room.workspaceId !== event.workspaceId || Object.keys(state.sessions).length >= state.capacity) return state;
