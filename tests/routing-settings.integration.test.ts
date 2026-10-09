@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
 import 'dotenv/config';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createDefaultRoutingPolicy, type RoutingDecision, type RoutingPolicy, type RoutingSettingsEnvelope } from '../features/settings/routing-policy';
@@ -82,6 +84,7 @@ function nativeDecision(taskKind = 'review', effort = 'high', instruction = 'Ins
 suite('PostgreSQL native routing service integration', () => {
   let serviceSource: DataSource;
   let workspaceId: string;
+  let serviceWorkspacePath: string | null = null;
   let priorConfigured = false;
   let priorPolicy: RoutingPolicy | null = null;
   const runIds: string[] = [];
@@ -96,7 +99,8 @@ suite('PostgreSQL native routing service integration', () => {
     priorConfigured = prior.configured;
     priorPolicy = prior.configured ? prior.policy : null;
     workspaceId = `routing-service-test-${randomUUID()}`;
-    await serviceSource.getRepository(RuntimeWorkspaceEntity).save({ id: workspaceId, name: 'Routing service test', path: process.cwd(), createdAt: new Date(), updatedAt: new Date() });
+    serviceWorkspacePath = await mkdtemp(path.join(process.cwd(), '.routing-service-test-'));
+    await serviceSource.getRepository(RuntimeWorkspaceEntity).save({ id: workspaceId, name: 'Routing service test', path: serviceWorkspacePath, createdAt: new Date(), updatedAt: new Date() });
   });
 
   afterEach(async () => {
@@ -104,12 +108,16 @@ suite('PostgreSQL native routing service integration', () => {
   });
 
   afterAll(async () => {
-    if (!serviceSource?.isInitialized) return;
-    await serviceSource.getRepository(RuntimeWorkspaceEntity).delete({ id: workspaceId });
-    const current = await getRoutingSettings(serviceSource);
-    if (priorConfigured && priorPolicy) await saveRoutingSettings(serviceSource, current.revision, priorPolicy);
-    else if (current.configured) await serviceSource.getRepository(RuntimeRoutingSettingsEntity).delete({ id: 'global' });
-    await serviceSource.destroy();
+    try {
+      if (!serviceSource?.isInitialized) return;
+      await serviceSource.getRepository(RuntimeWorkspaceEntity).delete({ id: workspaceId });
+      const current = await getRoutingSettings(serviceSource);
+      if (priorConfigured && priorPolicy) await saveRoutingSettings(serviceSource, current.revision, priorPolicy);
+      else if (current.configured) await serviceSource.getRepository(RuntimeRoutingSettingsEntity).delete({ id: 'global' });
+      await serviceSource.destroy();
+    } finally {
+      if (serviceWorkspacePath) await rm(serviceWorkspacePath, { recursive: true, force: true });
+    }
   });
 
   async function configure(policy: RoutingPolicy): Promise<RoutingSettingsEnvelope> {
@@ -194,7 +202,7 @@ suite('PostgreSQL native routing service integration', () => {
     });
     runIds.push(runId);
     await serviceSource.getRepository(RuntimeSessionEntity).save({
-      id: supervisorId, runId, role: 'supervisor', provider: 'codex', cwd: process.cwd(), nativeConversationId, model: 'actual-saved-codex-model', reasoningEffort: 'high',
+      id: supervisorId, runId, role: 'supervisor', provider: 'codex', cwd: serviceWorkspacePath!, nativeConversationId, model: 'actual-saved-codex-model', reasoningEffort: 'high',
       status: 'interrupted', pid: null, exitCode: null, lastSequence: 0, outputBytes: 0, startedAt: null, endedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
     });
     const service = new NativeRuntimeService(Promise.resolve(serviceSource));

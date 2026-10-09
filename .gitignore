@@ -7,3 +7,5 @@ node_modules/
 .next/
 out/
 *.tsbuildinfo
+# Added by code-review-graph
+.code-review-graph/
