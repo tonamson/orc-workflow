@@ -39,6 +39,10 @@ Each new task stores an immutable settings revision and policy snapshot. The nat
 
 Changing global settings affects future tasks. Existing tasks and exact-conversation resume retain their saved model/effort choices. Native Codex `/status` confirms the effective model and effort before a fresh session receives its task. Concurrent stale saves return a conflict instead of overwriting newer settings.
 
+Use **Kiểm tra CLI** in Settings to check the providers selected in the current draft on the server. The check reports executable availability, a version when verifiable, authentication status when the CLI exposes a noninteractive check, and whether ORC supports that runner. It does not save the draft or open an agent session. Codex uses the same `ORC_CODEX_BIN` override as the runtime; other providers are resolved from the server's `PATH`.
+
+These checks are local diagnostics, not an LLM request or proof that a selected model/effort works. AGY is checked for executable presence without launching its GUI; its authentication remains unverified. An installed Claude, AGY or OpenCode executable still requires an ORC runner before it can receive work.
+
 ## Native skills
 
 Use the provider's normal skill folders and syntax inside its native terminal. ORC does not install or translate skills. See [skills configuration](docs/research/skills-configuration.md) for current native conventions. [orc.config.example.json](docs/examples/orc.config.example.json) is a proposed manifest and is **not loaded by the app**.

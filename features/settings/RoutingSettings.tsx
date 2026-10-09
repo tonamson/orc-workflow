@@ -17,6 +17,7 @@ const TASK_LABELS: Record<TaskKind, { title: string; description: string }> = {
   review: { title: 'Review / audit', description: 'Rà soát thay đổi và tìm vấn đề' },
 };
 const effortLabel = (value: string) => value === 'default' ? 'Mặc định CLI' : value;
+type Readiness = { provider: RoutingPolicy['supervisor']['provider']; installed: boolean | null; version: string | null; authentication: 'authenticated' | 'unauthenticated' | 'unknown'; runnerSupported: boolean; orcReady: boolean; testedAt: string; diagnostic: 'complete' | 'timeout' | 'failed'; error?: 'connection' | 'server' };
 const settingsErrorLabel = (code?: string) => {
   if (code === 'invalid_routing_settings') return 'Cấu hình không hợp lệ. Kiểm tra model và danh sách effort rồi thử lại.';
   if (code === 'invalid_routing_policy') return 'Máy chủ trả về cấu hình định tuyến không hợp lệ.';
@@ -35,9 +36,49 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
   const [conflict, setConflict] = useState(false);
   const [discardPrompt, setDiscardPrompt] = useState(false);
   const [modelResetNotice, setModelResetNotice] = useState(false);
+  const [readiness, setReadiness] = useState<Record<string, Readiness>>({});
+  const [checking, setChecking] = useState<Record<string, boolean>>({});
   const loadSequence = useRef(0);
   const loadController = useRef<AbortController | null>(null);
+  const readinessSequence = useRef<Record<string, number>>({});
+  const readinessControllers = useRef<Record<string, AbortController>>({});
+  const readinessGeneration = useRef(0);
   const dirty = useMemo(() => !!saved && !!policy && JSON.stringify(saved.policy) !== JSON.stringify(policy), [saved, policy]);
+
+  const checkProvider = async (provider: RoutingPolicy['supervisor']['provider']) => {
+    readinessControllers.current[provider]?.abort();
+    const controller = new AbortController();
+    readinessControllers.current[provider] = controller;
+    const sequence = (readinessSequence.current[provider] ?? 0) + 1;
+    const generation = readinessGeneration.current;
+    readinessSequence.current[provider] = sequence;
+    setChecking(current => ({ ...current, [provider]: true }));
+    try {
+      const response = await fetch('/api/runtime/cli-readiness', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider }), signal: controller.signal });
+      const body = await response.json() as Readiness & { error?: string };
+      if (!response.ok) {
+        if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', runnerSupported: provider === 'codex', orcReady: false, testedAt: new Date().toISOString(), diagnostic: 'failed', error: 'server' } }));
+        return;
+      }
+      if (!controller.signal.aborted && readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: body }));
+    } catch (cause) {
+      if (controller.signal.aborted || readinessGeneration.current !== generation || readinessSequence.current[provider] !== sequence) return;
+      setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', runnerSupported: provider === 'codex', orcReady: false, testedAt: new Date().toISOString(), diagnostic: 'failed', error: cause instanceof TypeError ? 'connection' : 'server' } }));
+    } finally {
+      if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setChecking(current => ({ ...current, [provider]: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (open) return;
+    readinessGeneration.current += 1;
+    for (const controller of Object.values(readinessControllers.current)) controller.abort();
+    readinessControllers.current = {};
+    readinessSequence.current = {};
+    setChecking({});
+  }, [open]);
+
+  useEffect(() => () => { readinessGeneration.current += 1; for (const controller of Object.values(readinessControllers.current)) controller.abort(); }, []);
 
   const load = useCallback(async () => {
     loadController.current?.abort();
@@ -125,6 +166,10 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
             </section>;
           })}</div>
           </fieldset>
+          <section className="routing-readiness" aria-labelledby="routing-readiness-title"><div><h3 id="routing-readiness-title">Kiểm tra CLI trên máy chủ</h3><p>Kiểm tra bản cài đặt và trạng thái đăng nhập có thể xác minh. Không chạy agent hay gửi prompt.</p></div>
+            {[...new Set([policy.supervisor.provider, ...TASK_KINDS.map(kind => policy.profiles[kind].provider)])].map(provider => <div className="routing-readiness-row" key={provider}><div><strong>{ROUTING_PROVIDERS.find(item => item.id === provider)?.label}</strong>{readiness[provider] && <p role="status">{readiness[provider].error === 'connection' ? 'Không kết nối được máy chủ kiểm tra. Thử lại.' : readiness[provider].error === 'server' ? 'Máy chủ không kiểm tra được CLI. Thử lại.' : <>{readiness[provider].installed === true ? 'Đã cài' : readiness[provider].installed === false ? 'Chưa cài' : 'Chưa thể xác minh cài đặt'}{readiness[provider].version ? ` · phiên bản ${readiness[provider].version}` : ''} · {readiness[provider].authentication === 'authenticated' ? 'Đã xác thực' : readiness[provider].authentication === 'unauthenticated' ? 'Chưa xác thực' : 'Xác thực chưa thể xác minh'} · {readiness[provider].runnerSupported ? readiness[provider].orcReady ? 'Kiểm tra cục bộ đạt' : 'Chưa sẵn sàng cho runner ORC' : 'Runner ORC chưa hỗ trợ'}{readiness[provider].diagnostic === 'timeout' ? ' · CLI không phản hồi trong thời gian kiểm tra' : readiness[provider].diagnostic === 'failed' ? ' · Một phần kiểm tra chưa hoàn tất' : ''}</>}</p>}{readiness[provider] && <small>Đã kiểm tra {new Date(readiness[provider].testedAt ?? 0).toLocaleString()}</small>}</div><button type="button" className="routing-readiness-button" disabled={checking[provider]} onClick={() => void checkProvider(provider)}>{checking[provider] ? 'Đang kiểm tra…' : readiness[provider] ? 'Kiểm tra lại' : 'Kiểm tra CLI'}</button></div>)}
+            <p className="routing-readiness-note">Kiểm tra cục bộ không xác nhận phản hồi LLM, model hoặc effort đã chọn.</p>
+          </section>
           {modelResetNotice && <p className="routing-model-reset" role="status">Đã xóa model ID khi đổi provider để dùng model mặc định của provider mới.</p>}
         </>}
         {error && <div className="routing-error" role="alert">{error}{conflict ? <button type="button" onClick={() => { setSaved(null); setPolicy(null); void load(); }}>Tải cấu hình mới</button> : !saved && <button type="button" onClick={() => void load()}>Thử tải lại</button>}</div>}
