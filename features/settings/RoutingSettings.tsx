@@ -17,7 +17,19 @@ const TASK_LABELS: Record<TaskKind, { title: string; description: string }> = {
   review: { title: 'Review / audit', description: 'Rà soát thay đổi và tìm vấn đề' },
 };
 const effortLabel = (value: string) => value === 'default' ? 'Mặc định CLI' : value;
-type Readiness = { provider: RoutingPolicy['supervisor']['provider']; installed: boolean | null; version: string | null; authentication: 'authenticated' | 'unauthenticated' | 'unknown'; runnerSupported: boolean; orcReady: boolean; testedAt: string; diagnostic: 'complete' | 'timeout' | 'failed'; error?: 'connection' | 'server' };
+type Readiness = { provider: RoutingPolicy['supervisor']['provider']; installed: boolean | null; version: string | null; authentication: 'authenticated' | 'unauthenticated' | 'unknown'; testedAt: string; diagnostic: 'complete' | 'timeout' | 'failed'; error?: 'connection' | 'server' };
+function readinessLabel(result: Readiness): string {
+  if (result.error === 'connection') return 'Không kết nối được máy chủ kiểm tra. Thử lại.';
+  if (result.error === 'server') return 'Máy chủ không kiểm tra được CLI. Thử lại.';
+  if (result.installed === false) return 'Không tìm thấy CLI.';
+  if (result.installed === null) return 'Chưa thể xác minh CLI.';
+  if (result.version) {
+    const authStatus = result.authentication === 'authenticated' ? 'Đã đăng nhập' : result.authentication === 'unauthenticated' ? 'Chưa đăng nhập' : result.diagnostic === 'timeout' ? 'Đăng nhập chưa xác minh · hết thời gian kiểm tra' : 'Đăng nhập chưa xác minh';
+    return `CLI phản hồi · ${result.version} · ${authStatus}`;
+  }
+  const cliStatus = result.diagnostic === 'timeout' ? 'Lệnh kiểm tra CLI hết thời gian' : result.diagnostic === 'failed' ? 'Một phần kiểm tra CLI chưa hoàn tất' : 'Đã tìm thấy CLI';
+  return `${cliStatus} · Đăng nhập chưa xác minh`;
+}
 const settingsErrorLabel = (code?: string) => {
   if (code === 'invalid_routing_settings') return 'Cấu hình không hợp lệ. Kiểm tra model và danh sách effort rồi thử lại.';
   if (code === 'invalid_routing_policy') return 'Máy chủ trả về cấu hình định tuyến không hợp lệ.';
@@ -57,13 +69,13 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
       const response = await fetch('/api/runtime/cli-readiness', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider }), signal: controller.signal });
       const body = await response.json() as Readiness & { error?: string };
       if (!response.ok) {
-        if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', runnerSupported: provider === 'codex', orcReady: false, testedAt: new Date().toISOString(), diagnostic: 'failed', error: 'server' } }));
+        if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', testedAt: new Date().toISOString(), diagnostic: 'failed', error: 'server' } }));
         return;
       }
       if (!controller.signal.aborted && readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: body }));
     } catch (cause) {
       if (controller.signal.aborted || readinessGeneration.current !== generation || readinessSequence.current[provider] !== sequence) return;
-      setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', runnerSupported: provider === 'codex', orcReady: false, testedAt: new Date().toISOString(), diagnostic: 'failed', error: cause instanceof TypeError ? 'connection' : 'server' } }));
+      setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', testedAt: new Date().toISOString(), diagnostic: 'failed', error: cause instanceof TypeError ? 'connection' : 'server' } }));
     } finally {
       if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setChecking(current => ({ ...current, [provider]: false }));
     }
@@ -166,9 +178,8 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
             </section>;
           })}</div>
           </fieldset>
-          <section className="routing-readiness" aria-labelledby="routing-readiness-title"><div><h3 id="routing-readiness-title">Kiểm tra CLI trên máy chủ</h3><p>Kiểm tra bản cài đặt và trạng thái đăng nhập có thể xác minh. Không chạy agent hay gửi prompt.</p></div>
-            {[...new Set([policy.supervisor.provider, ...TASK_KINDS.map(kind => policy.profiles[kind].provider)])].map(provider => <div className="routing-readiness-row" key={provider}><div><strong>{ROUTING_PROVIDERS.find(item => item.id === provider)?.label}</strong>{readiness[provider] && <p role="status">{readiness[provider].error === 'connection' ? 'Không kết nối được máy chủ kiểm tra. Thử lại.' : readiness[provider].error === 'server' ? 'Máy chủ không kiểm tra được CLI. Thử lại.' : <>{readiness[provider].installed === true ? 'Đã cài' : readiness[provider].installed === false ? 'Chưa cài' : 'Chưa thể xác minh cài đặt'}{readiness[provider].version ? ` · phiên bản ${readiness[provider].version}` : ''} · {readiness[provider].authentication === 'authenticated' ? 'Đã xác thực' : readiness[provider].authentication === 'unauthenticated' ? 'Chưa xác thực' : 'Xác thực chưa thể xác minh'} · {readiness[provider].runnerSupported ? readiness[provider].orcReady ? 'Kiểm tra cục bộ đạt' : 'Chưa sẵn sàng cho runner ORC' : 'Runner ORC chưa hỗ trợ'}{readiness[provider].diagnostic === 'timeout' ? ' · CLI không phản hồi trong thời gian kiểm tra' : readiness[provider].diagnostic === 'failed' ? ' · Một phần kiểm tra chưa hoàn tất' : ''}</>}</p>}{readiness[provider] && <small>Đã kiểm tra {new Date(readiness[provider].testedAt ?? 0).toLocaleString()}</small>}</div><button type="button" className="routing-readiness-button" disabled={checking[provider]} onClick={() => void checkProvider(provider)}>{checking[provider] ? 'Đang kiểm tra…' : readiness[provider] ? 'Kiểm tra lại' : 'Kiểm tra CLI'}</button></div>)}
-            <p className="routing-readiness-note">Kiểm tra cục bộ không xác nhận phản hồi LLM, model hoặc effort đã chọn.</p>
+          <section className="routing-readiness" aria-labelledby="routing-readiness-title"><div><h3 id="routing-readiness-title">Kiểm tra CLI</h3><p>Kiểm tra cài đặt và đăng nhập CLI trên máy chủ.</p></div>
+            {[...new Set([policy.supervisor.provider, ...TASK_KINDS.map(kind => policy.profiles[kind].provider)])].map(provider => <div className="routing-readiness-row" key={provider}><div><strong>{ROUTING_PROVIDERS.find(item => item.id === provider)?.label}</strong>{readiness[provider] && <p role="status">{readinessLabel(readiness[provider])}</p>}{readiness[provider] && <small>Đã kiểm tra {new Date(readiness[provider].testedAt).toLocaleString()}</small>}</div><button type="button" className="routing-readiness-button" disabled={checking[provider]} onClick={() => void checkProvider(provider)}>{checking[provider] ? 'Đang kiểm tra…' : readiness[provider] ? 'Kiểm tra lại' : 'Kiểm tra CLI'}</button></div>)}
           </section>
           {modelResetNotice && <p className="routing-model-reset" role="status">Đã xóa model ID khi đổi provider để dùng model mặc định của provider mới.</p>}
         </>}

@@ -2,7 +2,7 @@
 
 Validated on 2026-10-09 using the production preview and actual installed commands. Luna implemented the feature; the parent reviewed the source, requested corrections, and exercised Chrome and the API.
 
-Settings exposes one **Kiểm tra CLI** action per unique provider selected in the current draft. Testing does not save that draft, start an agent, or send an LLM prompt. Results show availability, verifiable version/authentication, runner support, timestamp and safe failure information. A version-only result cannot establish authentication or ORC readiness.
+Settings exposes one **Kiểm tra CLI** action per unique provider selected in the current draft. Testing does not save that draft, start an agent, or send an LLM prompt. Results show availability, verifiable version/authentication, timestamp and safe failure information. Runner support is separate and is not part of the test result. A successful version check displays **CLI phản hồi**; unavailable authentication displays the neutral **Đăng nhập chưa xác minh**.
 
 ## Actual results
 
@@ -18,6 +18,8 @@ Codex, agy and Claude were tested from the saved configuration. OpenCode was sel
 Chrome desktop and emulated iPhone 16 (393 × 852) showed accessible test buttons, wrapped results and visible close/save controls. A mobile **Kiểm tra lại** updated the Codex timestamp. Chrome Offline produced **Không kết nối được máy chủ kiểm tra. Thử lại.**; restoring No throttling and retesting recovered the successful local result. Device emulation and DevTools were closed afterward.
 
 Evidence: [desktop](images/cli-readiness-desktop.png), [mobile](images/cli-readiness-mobile.png), [offline](images/cli-readiness-offline.png).
+
+Presentation follow-up: removed runner-support wording and the technical footnote from the test section. The production UI was retested with Codex and Claude displaying **CLI phản hồi · [version] · Đã đăng nhập**, and agy displaying **Đã tìm thấy CLI · Đăng nhập chưa xác minh**. The desktop image reflects these final labels; mobile/offline images record the initial diagnostic checks. Production build and TypeScript passed after the wording update.
 
 The API rejected an arbitrary `sh` provider with HTTP 400 and a foreign mutation origin with HTTP 403. Provider names select fixed command argument lists. Output is bounded, commands time out and are terminated, requests for the same provider share an in-flight probe, and concurrency is limited. Raw CLI output, account details and credentials are not returned.
 
