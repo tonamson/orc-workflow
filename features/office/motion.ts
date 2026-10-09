@@ -3,6 +3,30 @@ import { seatAnchor, standingAnchor, type LayoutRoom, type Point } from './geome
 export type MotionTarget = { animate: (frames: Keyframe[], options: KeyframeAnimationOptions) => Animation };
 export type MotionOptions = { duration: number; onFinish: () => void };
 
+function sourceToOffice(room: LayoutRoom, point: Point): Point {
+  const [sx, sy, sw, sh] = room.source;
+  const [dx, dy, dw, dh] = room.destination;
+  return { x: dx + ((point.x - sx) / sw) * dw, y: dy + ((point.y - sy) / sh) * dh };
+}
+
+function centralDoorX(room: LayoutRoom): number {
+  const [left, , width] = room.source;
+  const sourceRight = room.room.template === 'ui';
+  return sourceRight !== room.mirrored ? left + width - 18 : left + 18;
+}
+
+export function officeReportRoute(room: LayoutRoom, slot: number): Point[] {
+  const start = sourceToOffice(room, seatAnchor(room, slot));
+  const workDoor = sourceToOffice(room, { x: centralDoorX(room), y: 810 });
+  return [start, sourceToOffice(room, { x: seatAnchor(room, slot).x, y: 810 }), workDoor,
+    { x: 793, y: workDoor.y }, { x: 793, y: 440 }, { x: 793, y: 424 }, { x: 793, y: 330 }];
+}
+
+export function officeExitRoute(officeHeight = 992): Point[] {
+  const entrance = officeHeight - 92;
+  return [{ x: 793, y: 330 }, { x: 793, y: 424 }, { x: 793, y: 810 }, { x: 793, y: entrance }, { x: 793, y: officeHeight + 100 }];
+}
+
 export function routeFor(room: LayoutRoom, slot: number, phase: 'assign' | 'report' | 'exit', leadSlot: number | null): Point[] {
   const [left, , width] = room.source;
   const x = phase === 'assign' ? standingAnchor(room, slot) : seatAnchor(room, slot);
@@ -15,8 +39,8 @@ export function routeFor(room: LayoutRoom, slot: number, phase: 'assign' | 'repo
     const lead = seatAnchor(room, leadSlot!);
     return [x, aisle, { x: lead.x + 62, y: lead.y }];
   }
-  const doorX = room.mirrored ? left + 18 : left + width - 18;
-  const exteriorX = room.mirrored ? left - 18 : left + width + 18;
+  const doorX = centralDoorX(room);
+  const exteriorX = doorX > left + width / 2 ? left + width + 18 : left - 18;
   const door = { x: doorX, y: 810 };
   const exterior = { x: exteriorX, y: 810 };
   const aisle = { x: left + width / 2, y: 810 };

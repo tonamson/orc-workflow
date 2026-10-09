@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "implementationStatus": "proposal-not-loaded-by-app",
+  "workspaces": [
+    {
+      "id": "customer-project",
+      "customerId": "customer",
+      "name": "Customer project",
+      "repoPath": "/srv/repos/customer-project",
+      "agentProfiles": [
+        {
+          "id": "supervisor-codex",
+          "role": "supervisor",
+          "provider": "codex",
+          "skillRoots": [".agents/skills"],
+          "requiredSkills": ["project-planning"]
+        },
+        {
+          "id": "frontend-claude",
+          "role": "peer",
+          "provider": "claude",
+          "skillRoots": [".claude/skills"],
+          "requiredSkills": ["frontend-review"]
+        }
+      ]
+    }
+  ]
+}

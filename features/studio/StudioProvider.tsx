@@ -1,22 +1,22 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { createDemoState } from './model/seed';
+import { createEmptyState } from './model/empty';
 import { studioReducer } from './model/reducer';
 import type { AppState, Dispatch, StudioEvent } from './model/types';
 import { rebasePendingEvents } from './persistence-rebase';
+import { isLocalOnlyEvent } from './persistence-events';
 
 export type SaveStatus = 'loading' | 'saved' | 'saving' | 'error';
 type StudioContextValue = { state: AppState; dispatch: Dispatch<StudioEvent>; saveStatus: SaveStatus; retryLoad: () => void; retrySave: () => void; loaded: boolean; pendingCount: number };
 const StudioContext = createContext<StudioContextValue | null>(null);
-const localOnly = new Set<StudioEvent['type']>(['ui.navigate','ui.role','ui.client','ui.workspace','ui.mode','ui.panel','ui.select-session','ui.select-record','ui.search','ui.record-filter']);
-
 export function StudioProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(studioReducer, undefined, createDemoState);
+  const [state, rawDispatch] = useReducer(studioReducer, undefined, createEmptyState);
   const [loaded, setLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('loading');
   const [reloadToken, setReloadToken] = useState(0);
   const stateRef = useRef(state); stateRef.current = state;
+  const departureDeadlines = useRef(new Map<string, { sessionId: string; sequence: number; deadline: number }>());
   const revision = useRef(0);
   const queue = useRef<Array<{ event: StudioEvent; eventId: string; context: { role: AppState['ui']['role']; workspaceId: string; clientViewerId: string | null } }>>([]);
   const running = useRef(false);
@@ -67,9 +67,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const dispatch = useCallback<Dispatch<StudioEvent>>(event => {
     if (event.type === 'persistence.hydrate') return;
-    if (!loaded && !localOnly.has(event.type)) return;
+    if (!loaded && !isLocalOnlyEvent(event)) return;
     rawDispatch(event);
-    if (!localOnly.has(event.type)) {
+    if (!isLocalOnlyEvent(event)) {
       const current = stateRef.current;
       if (!current.ui.workspaceId) return;
       queue.current.push({ event, eventId: crypto.randomUUID(), context: { role: current.ui.role, workspaceId: current.ui.workspaceId, clientViewerId: current.ui.clientViewerId } });
@@ -79,6 +79,28 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [processQueue, loaded]);
   const retryLoad = useCallback(() => { setLoaded(false); setReloadToken(token => token + 1); }, []);
   const retrySave = useCallback(() => { void processQueue(true); }, [processQueue]);
+  const departures = Object.values(state.sessions).filter(session => session.runtimeMotion?.phase === 'exit' && session.nativeRuntime && !session.processConfirmed);
+  const departureKey = departures.map(session => `${session.id}:${session.runtimeMotion!.sequence}`).sort().join('|');
+  useEffect(() => {
+    const now = Date.now();
+    const active = new Map<string, { sessionId: string; sequence: number; deadline: number }>();
+    for (const session of departures) {
+      const sequence = session.runtimeMotion!.sequence;
+      const key = `${session.id}:${sequence}`;
+      active.set(key, departureDeadlines.current.get(key) ?? { sessionId: session.id, sequence, deadline: now + 5000 });
+    }
+    departureDeadlines.current = active;
+    const earliest = Math.min(...Array.from(active.values(), item => item.deadline));
+    if (!Number.isFinite(earliest)) return;
+    const timer = window.setTimeout(() => {
+      const current = stateRef.current.sessions;
+      const expired = Array.from(departureDeadlines.current.values()).filter(item => item.deadline <= Date.now()
+        && current[item.sessionId]?.runtimeMotion?.phase === 'exit'
+        && current[item.sessionId]?.runtimeMotion?.sequence === item.sequence);
+      expired.forEach(item => rawDispatch({ type: 'runtime.motion-finished', sessionId: item.sessionId, sequence: item.sequence }));
+    }, Math.max(0, earliest - now));
+    return () => window.clearTimeout(timer);
+  }, [departureKey, dispatch]);
   const value = useMemo(() => ({ state, dispatch, saveStatus, retryLoad, retrySave, loaded, pendingCount }), [state, dispatch, saveStatus, retryLoad, retrySave, loaded, pendingCount]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

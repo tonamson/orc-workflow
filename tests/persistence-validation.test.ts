@@ -10,7 +10,7 @@ describe('persistence request validation', () => {
       event: { type: 'session.config', sessionId: 'session-atlas', provider: 'claude', model: 'claude-sonnet', reasoning: { kind: 'thinking-level', value: 'high' } },
     });
     expect(result.ok).toBe(true);
-    expect(validateMutationRequest({ eventId: 'resize-1', expectedRevision: 0, context, event: { type: 'ui.departments-resize', count: 1 } }).ok).toBe(true);
+    expect(validateMutationRequest({ eventId: 'resize-1', expectedRevision: 0, context, event: { type: 'ui.departments-resize', count: 1 } }).ok).toBe(false);
   });
 
   it('rejects view-state events and unknown event types from the API', () => {
@@ -19,6 +19,12 @@ describe('persistence request validation', () => {
       event: { type: 'ui.search', search: 'private' },
     });
     expect(result).toMatchObject({ ok: false, code: 'invalid_event' });
+  });
+
+  it('rejects legacy demo reset events so fixture data cannot be restored operationally', () => {
+    for (const type of ['demo.seed-reset', 'demo.overflow-reset']) {
+      expect(validateMutationRequest({ eventId: `legacy-${type}`, expectedRevision: 0, context, event: { type } }).ok).toBe(false);
+    }
   });
 
   it('rejects malformed task, report, and context payloads before storage', () => {

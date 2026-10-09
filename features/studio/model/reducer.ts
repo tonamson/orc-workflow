@@ -1,6 +1,5 @@
 import type { AppState, Session, StudioEvent } from './types';
-import { assignTask, canAssignToSession, createOverflowDemoScenario, isOverflowDemoScenario, resizeDemoDepartments } from './allocation';
-import { createDemoState } from './seed';
+import { canAssignToSession } from './allocation';
 import { canAccessWorkspace, canSelectSession, visibleRecords, visibleRooms } from './selectors';
 
 function reportBindingIsCurrent(state: AppState, report: AppState['reports'][string]): boolean {
@@ -16,17 +15,98 @@ function appendStatus(session: Session, text: string, lifecycle: Session['lifecy
   return { ...session, lifecycle, lastUpdate: timestamp, messages: [...session.messages, { id: `status-${timestamp}`, kind: 'status' as const, text, timestamp }].slice(-500) };
 }
 
-function locateSlot(state: AppState, roomId: string): 0 | 1 | 2 | null {
-  const occupied = new Set(Object.values(state.sessions).filter(session => session.roomId === roomId).map(session => session.seatSlot));
-  return ([0, 1, 2] as const).find(slot => !occupied.has(slot)) ?? null;
-}
-
 export function studioReducer(state: AppState, event: StudioEvent): AppState {
   switch (event.type) {
-    case 'persistence.hydrate': return { ...event.state, ui: state.ui };
+    case 'persistence.hydrate': return { ...event.state, workspaces: { ...event.state.workspaces, ...state.workspaces }, rooms: { ...event.state.rooms, ...state.rooms }, sessions: { ...event.state.sessions, ...state.sessions }, ui: state.ui };
     case 'ui.workspace':
-      if (!event.workspaceId || !canAccessWorkspace(state, event.workspaceId)) return state;
+      if (event.workspaceId === null) return { ...state, ui: { ...state.ui, workspaceId: null, roomId: null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
+      if (!canAccessWorkspace(state, event.workspaceId)) return state;
       return { ...state, ui: { ...state.ui, workspaceId: event.workspaceId, roomId: state.ui.role === 'client' ? `${event.workspaceId}-lobby` : null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
+    case 'runtime.workspaces': {
+      const workspaces = Object.fromEntries(event.workspaces.map(workspace => [workspace.id, { id: workspace.id, customerId: '', name: workspace.name, repoPath: workspace.path }]));
+      const rooms: AppState['rooms'] = {};
+      event.workspaces.forEach(workspace => {
+        const entries: AppState['rooms'][string][] = [
+          { id: `${workspace.id}-supervisor`, workspaceId: workspace.id, departmentId: null, name: 'Điều phối', kind: 'supervisor', template: 'supervisor' },
+          { id: `${workspace.id}-lobby`, workspaceId: workspace.id, departmentId: null, name: 'Phòng khách', kind: 'lobby', template: 'lobby' },
+          { id: `${workspace.id}-meeting`, workspaceId: workspace.id, departmentId: null, name: 'Phòng họp', kind: 'meeting', template: 'meeting' },
+        ];
+        entries.forEach(room => { rooms[room.id] = room; });
+      });
+      Object.values(state.rooms).filter(room => Object.values(state.sessions).some(session => session.roomId === room.id)).forEach(room => { rooms[room.id] = room; });
+      const workspaceId = state.ui.workspaceId && workspaces[state.ui.workspaceId] ? state.ui.workspaceId : null;
+      const roomId = workspaceId && state.ui.roomId && rooms[state.ui.roomId]?.workspaceId === workspaceId ? state.ui.roomId : null;
+      const selectedSessionId = workspaceId && state.ui.selectedSessionId && state.sessions[state.ui.selectedSessionId]?.workspaceId === workspaceId ? state.ui.selectedSessionId : null;
+      const selectedRecordId = workspaceId && state.ui.selectedRecordId && state.records[state.ui.selectedRecordId]?.workspaceId === workspaceId ? state.ui.selectedRecordId : null;
+      return { ...state, workspaces, rooms, ui: { ...state.ui, workspaceId, roomId, selectedSessionId, selectedRecordId, panelOpen: workspaceId ? state.ui.panelOpen : false } };
+    }
+    case 'runtime.runs': {
+      if (event.workspaceId === null) return {
+        ...state,
+        sessions: Object.fromEntries(Object.entries(state.sessions).filter(([, session]) => !session.nativeRuntime)),
+        tasks: Object.fromEntries(Object.entries(state.tasks).filter(([, task]) => !task.id.startsWith('runtime-'))),
+      };
+      const runIds = new Set(event.runs.map(run => run.id));
+      const base = {
+        ...state,
+        sessions: Object.fromEntries(Object.entries(state.sessions).filter(([, session]) => !session.nativeRuntime || session.workspaceId !== event.workspaceId || (session.runtimeRunId && runIds.has(session.runtimeRunId)))),
+        tasks: Object.fromEntries(Object.entries(state.tasks).filter(([, task]) => !task.id.startsWith('runtime-') || task.workspaceId !== event.workspaceId || runIds.has(task.id.slice('runtime-'.length)))),
+      };
+      return event.runs.reduce((current, run) => studioReducer(current, { type: 'runtime.run', run }), base);
+    }
+    case 'runtime.run': {
+      if (!event.run) return { ...state, sessions: Object.fromEntries(Object.entries(state.sessions).filter(([, session]) => !session.nativeRuntime)), tasks: Object.fromEntries(Object.entries(state.tasks).filter(([, task]) => !task.id.startsWith('runtime-'))) };
+      const run = event.run;
+      const workRoomId = `${run.workspaceId}-agents`;
+      const supervisorRoomId = `${run.workspaceId}-supervisor`;
+      const departmentId = `${run.workspaceId}-runtime-department`;
+      const rooms = { ...state.rooms,
+        [supervisorRoomId]: state.rooms[supervisorRoomId] ?? { id: supervisorRoomId, workspaceId: run.workspaceId, departmentId: null, name: 'Supervisor', kind: 'supervisor' as const, template: 'supervisor' as const },
+        [workRoomId]: { id: workRoomId, workspaceId: run.workspaceId, departmentId, name: 'Agent', kind: 'work' as const, template: 'engineering' as const },
+      };
+      const departments = { ...state.departments, [departmentId]: { id: departmentId, workspaceId: run.workspaceId, name: 'Agent', leadSessionId: null } };
+      const existing = { ...state.sessions };
+      Object.values(existing).filter(session => session.nativeRuntime && session.runtimeRunId === run.id).forEach(session => { delete existing[session.id]; });
+      const sessions = run.sessions.reduce((all, item, seatSlot) => {
+        const roomId = item.role === 'supervisor' ? supervisorRoomId : workRoomId;
+        const lifecycle = item.status === 'active' ? 'active' as const : item.status === 'starting' ? 'starting' as const : item.status === 'closing' ? 'closing' as const : item.status === 'error' ? 'error' as const : 'disconnected' as const;
+        const previous = state.sessions[item.id];
+        if (item.status === 'closed') {
+          if (previous?.runtimeMotion?.phase === 'exit' && !previous.runtimeMotion.completed) {
+            all[item.id] = previous;
+            return all;
+          }
+          if (item.role === 'peer' && run.status === 'done' && run.phase === 'done' && previous?.processConfirmed) {
+            all[item.id] = { ...previous, roomId: supervisorRoomId, lifecycle: 'disconnected', processConfirmed: false,
+              runtimeMotion: { phase: 'exit', sequence: (previous.runtimeMotion?.sequence ?? 0) + 1, origin: 'supervisor-desk' } };
+          }
+          return all;
+        }
+        const runtimeMotion = item.role === 'peer' && item.processConfirmed && !previous?.processConfirmed && run.phase === 'peer_running'
+          ? { phase: 'assign' as const, sequence: (previous?.runtimeMotion?.sequence ?? 0) + 1 }
+          : item.role === 'peer' && run.phase === 'supervisor_reporting' && state.tasks[`runtime-${run.id}`]?.status !== 'reporting'
+            ? { phase: 'report' as const, sequence: (previous?.runtimeMotion?.sequence ?? 0) + 1 }
+          : previous?.runtimeMotion;
+        all[item.id] = { id: item.id, workspaceId: run.workspaceId, roomId, seatSlot: Math.min(seatSlot, 2) as 0 | 1 | 2, agentName: item.role === 'supervisor' ? 'Codex Supervisor' : 'Codex Agent', avatar: item.role === 'supervisor' ? 'Nova' : 'Atlas', role: item.role === 'supervisor' ? 'supervisor' : 'peer', provider: 'codex', model: item.model, reasoning: item.reasoningEffort ? { kind: 'effort', value: item.reasoningEffort } : { kind: 'unknown' }, skills: [], lifecycle, processConfirmed: item.processConfirmed, lastUpdate: item.startedAt ? Date.parse(item.startedAt) : 0, messages: previous?.messages ?? [], nativeRuntime: true, runtimeRunId: run.id, ...(runtimeMotion ? { runtimeMotion } : {}) };
+        return all;
+      }, existing as AppState['sessions']);
+      const taskStatus = run.status === 'done' ? 'done' as const : run.status === 'error' || run.status === 'interrupted' || run.status === 'closed' ? 'blocked' as const : run.phase === 'supervisor_reporting' || run.status === 'reporting' ? 'reporting' as const : run.phase === 'delegating' ? 'assigned' as const : 'working' as const;
+      const taskSessionId = run.phase === 'supervisor_delegation' ? run.sessions.find(item => item.role === 'supervisor')?.id : run.sessions.find(item => item.role === 'peer')?.id;
+      const task = { id: `runtime-${run.id}`, workspaceId: run.workspaceId, departmentId, requiredSkills: [], status: taskStatus, sessionId: taskSessionId ?? null, title: run.taskId };
+      return { ...state, rooms, departments, sessions, tasks: { ...state.tasks, [task.id]: task } };
+    }
+    case 'runtime.motion-finished': {
+      const session = state.sessions[event.sessionId];
+      if (!session?.runtimeMotion || session.runtimeMotion.sequence !== event.sequence) return state;
+      if (session.runtimeMotion.phase === 'report') return { ...state, sessions: { ...state.sessions, [session.id]: { ...session, runtimeMotion: { ...session.runtimeMotion, completed: true } } } };
+      if (session.runtimeMotion.phase === 'exit' && session.nativeRuntime && !session.processConfirmed) {
+        const sessions = { ...state.sessions }; delete sessions[session.id];
+        return { ...state, sessions };
+      }
+      const updated = { ...session };
+      delete updated.runtimeMotion;
+      return { ...state, sessions: { ...state.sessions, [session.id]: updated } };
+    }
     case 'ui.navigate': {
       if (event.roomId !== null && !visibleRooms(state).some(room => room.id === event.roomId)) return state;
       return { ...state, ui: { ...state.ui, roomId: event.roomId, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
@@ -35,17 +115,17 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
       if (event.role === 'client') {
         const viewer = state.ui.clientViewerId ? state.clientViewers[state.ui.clientViewerId] : null;
         const candidate = viewer && Object.values(state.workspaces).find(workspace => workspace.id === state.ui.workspaceId && workspace.customerId === viewer.customerId && viewer.allowedWorkspaceIds.includes(workspace.id));
-        const clientViewerId = viewer ? viewer.id : 'client-a';
+        const clientViewerId = viewer?.id ?? 'client-a';
         const activeViewer = viewer ?? state.clientViewers[clientViewerId];
         const available = activeViewer ? Object.values(state.workspaces).filter(workspace => workspace.customerId === activeViewer.customerId && activeViewer.allowedWorkspaceIds.includes(workspace.id)) : [];
         const workspace = candidate ?? available[0];
         return { ...state, ui: { ...state.ui, role: 'client', clientViewerId, workspaceId: workspace?.id ?? null, roomId: workspace ? `${workspace.id}-lobby` : null, selectedSessionId: null, selectedRecordId: null, panelOpen: false } };
       }
-      const workspaceId = state.ui.workspaceId && state.workspaces[state.ui.workspaceId] ? state.ui.workspaceId : 'demo-website';
+      const workspaceId = state.ui.workspaceId && state.workspaces[state.ui.workspaceId] ? state.ui.workspaceId : null;
       const next: AppState = { ...state, ui: { ...state.ui, role: event.role, workspaceId, roomId: state.ui.roomId, selectedSessionId: state.ui.selectedSessionId, selectedRecordId: state.ui.selectedRecordId } };
       const currentRoom = state.ui.roomId ? state.rooms[state.ui.roomId] : null;
       if (!currentRoom || currentRoom.workspaceId !== workspaceId || (event.role === 'employee' && currentRoom.kind === 'lobby')) {
-        next.ui.roomId = event.role === 'employee' ? `${workspaceId}-meeting` : null;
+        next.ui.roomId = event.role === 'employee' ? Object.values(next.rooms).find(room => room.workspaceId === workspaceId && room.kind === 'meeting')?.id ?? null : null;
       }
       const selectedSessionId = state.ui.selectedSessionId;
       if (selectedSessionId && !canSelectSession(next, selectedSessionId)) next.ui.selectedSessionId = null;
@@ -78,39 +158,6 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
     }
     case 'ui.search': return { ...state, ui: { ...state.ui, search: event.search } };
     case 'ui.record-filter': return { ...state, ui: { ...state.ui, recordFilter: event.filter } };
-    case 'ui.departments-resize': {
-      if (state.ui.role === 'client' || !state.ui.workspaceId) return state;
-      return resizeDemoDepartments(state, state.ui.workspaceId, event.count);
-    }
-    case 'ui.department-create': {
-      const name = event.name.trim(); const workspaceId = state.ui.workspaceId;
-      if (!name || !workspaceId || state.ui.role === 'client') return state;
-      const departments = Object.values(state.departments).filter(department => department.workspaceId === workspaceId);
-      let index = 1; let id = `${workspaceId}-created-${String(index).padStart(2, '0')}`;
-      while (state.departments[id]) { index += 1; id = `${workspaceId}-created-${String(index).padStart(2, '0')}`; }
-      const template = departments.length % 2 ? 'engineering' : 'ui';
-      const roomId = `${id}-room-01`;
-      return {
-        ...state,
-        departments: { ...state.departments, [id]: { id, workspaceId, name, leadSessionId: null } },
-        rooms: { ...state.rooms, [roomId]: { id: roomId, workspaceId, departmentId: id, name, kind: 'work', template } },
-      };
-    }
-    case 'demo.overflow-reset': {
-      const scenario = createOverflowDemoScenario(state);
-      if (scenario === state) return state;
-      return Object.values(scenario.sessions).reduce((next, session) => studioReducer(next, { type: 'session.started', sessionId: session.id }), scenario);
-    }
-    case 'demo.seed-reset': return state.ui.role === 'ceo' && isOverflowDemoScenario(state) ? createDemoState() : state;
-    case 'session.start-requested': {
-      const room = state.rooms[event.roomId];
-      if (state.sessions[event.id] || state.archives[event.id] || !room || room.workspaceId !== event.workspaceId || Object.keys(state.sessions).length >= state.capacity) return state;
-      const seatSlot = locateSlot(state, room.id);
-      if (seatSlot === null) return state;
-      const session: Session = { id: event.id, workspaceId: event.workspaceId, roomId: event.roomId, seatSlot, agentName: event.agentName, avatar: event.avatar, role: room.departmentId && !state.departments[room.departmentId]?.leadSessionId ? 'lead' : 'peer', provider: event.provider, model: event.model, reasoning: event.reasoning, skills: [...event.skills], lifecycle: 'starting', processConfirmed: false, lastUpdate: 0, messages: [] };
-      const departments = room.departmentId && session.role === 'lead' ? { ...state.departments, [room.departmentId]: { ...state.departments[room.departmentId], leadSessionId: event.id } } : state.departments;
-      return { ...state, sessions: { ...state.sessions, [event.id]: session }, departments };
-    }
     case 'session.started': {
       const session = state.sessions[event.sessionId];
       if (!session || session.lifecycle !== 'starting') return state;
@@ -161,12 +208,6 @@ export function studioReducer(state: AppState, event: StudioEvent): AppState {
       const task = state.tasks[event.taskId]; const session = state.sessions[event.sessionId];
       if (!task || !session || task.status !== 'queued' || !canAssignToSession(state, task, session)) return state;
       return { ...state, tasks: { ...state.tasks, [task.id]: { ...task, sessionId: session.id, status: 'assigned' } } };
-    }
-    case 'task.assign-requested': {
-      if (state.ui.role === 'client') return state;
-      const task = state.tasks[event.taskId];
-      if (!task || task.workspaceId !== state.ui.workspaceId) return state;
-      return assignTask(state, task.id, event.provider).state;
     }
     case 'task.status': {
       const task = state.tasks[event.taskId];

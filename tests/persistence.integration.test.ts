@@ -3,8 +3,10 @@ import 'dotenv/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DataSource } from 'typeorm';
 import { createPersistenceDataSource } from '../server/persistence/data-source';
+import { RuntimeEventEntity } from '../server/runtime/entities';
 import { StudioPersistenceStore } from '../server/persistence/store';
 import type { StudioEvent } from '../features/studio/model/types';
+import { createDemoState } from '../features/studio/model/seed';
 
 const databaseUrl = process.env.ORC_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -21,7 +23,7 @@ suite('PostgreSQL studio persistence integration', () => {
     await dataSource.initialize();
     await dataSource.runMigrations();
     stateId = `test-${randomUUID()}`;
-    store = new StudioPersistenceStore(dataSource, stateId);
+    store = new StudioPersistenceStore(dataSource, stateId, createDemoState);
   });
 
   afterAll(async () => {
@@ -94,6 +96,26 @@ suite('PostgreSQL studio persistence integration', () => {
     expect(closed.state.sessions['session-atlas']).toBeUndefined();
     expect(closed.state.archives['session-atlas']).toBeDefined();
     expect(await store.findConversationReference('session-atlas')).toMatchObject({ nativeConversationId: null });
+  });
+
+  it('persists runtime PTY resize markers under the runtime event kind constraint', async () => {
+    const suffix = randomUUID();
+    const workspaceId = `test-${suffix}`;
+    const runId = randomUUID();
+    const sessionId = randomUUID();
+    try {
+      await dataSource.query('INSERT INTO runtime_workspace (id, name, path) VALUES ($1, $2, $3)', [workspaceId, 'Resize event integration', `/tmp/orc-resize-${suffix}`]);
+      await dataSource.query(`INSERT INTO runtime_run (id, workspace_id, task_id, prompt, status, phase)
+        VALUES ($1, $2, $3, $4, 'active', 'supervisor_delegation')`, [runId, workspaceId, 'resize-integration', 'Persist a resize marker']);
+      await dataSource.query(`INSERT INTO runtime_session (id, run_id, role, provider, cwd, status)
+        VALUES ($1, $2, 'supervisor', 'codex', $3, 'closed')`, [sessionId, runId, `/tmp/orc-resize-${suffix}`]);
+      await dataSource.getRepository(RuntimeEventEntity).insert({ sessionId, sequence: 1, kind: 'resize', text: JSON.stringify({ cols: 92, rows: 30 }), dataBase64: null, status: null, createdAt: new Date() });
+
+      const [event] = await dataSource.query('SELECT kind, text FROM runtime_event WHERE session_id = $1 AND sequence = 1', [sessionId]);
+      expect(event).toMatchObject({ kind: 'resize', text: '{"cols":92,"rows":30}' });
+    } finally {
+      await dataSource.query('DELETE FROM runtime_workspace WHERE id = $1', [workspaceId]);
+    }
   });
 
   it('rolls back the aggregate revision when the event journal insert fails', async () => {

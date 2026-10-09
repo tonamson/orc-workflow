@@ -14,9 +14,10 @@ export function useAgentMotion(target: RefObject<HTMLElement | null>, route: Poi
     let animation: ReturnType<typeof startMotion> | null = null;
     let completed = false;
     let observer: IntersectionObserver | null = null;
+    const finish = () => { if (!completed) { completed = true; observer?.disconnect(); onFinish(); } };
     const start = () => {
       if (completed) return;
-      if (!animation) animation = startMotion(element as MotionTarget, route, { duration: phase === 'exit' ? 4200 : 3600, onFinish: () => { completed = true; observer?.disconnect(); onFinish(); } });
+      if (!animation) animation = startMotion(element as MotionTarget, route, { duration: phase === 'exit' ? 4200 : 3600, onFinish: finish });
       else animation.play();
     };
     if ('IntersectionObserver' in window) {
@@ -26,9 +27,9 @@ export function useAgentMotion(target: RefObject<HTMLElement | null>, route: Poi
       });
       observer = observerInstance;
       observerInstance.observe(element);
-      return () => { observerInstance.disconnect(); animation?.cancel(); };
+      return () => { if (phase === 'report' || phase === 'exit') finish(); observerInstance.disconnect(); animation?.cancel(); };
     }
     start();
-    return () => animation?.cancel();
+    return () => { if (phase === 'report' || phase === 'exit') finish(); animation?.cancel(); };
   }, [target, route, phase, reducedMotion, onFinish]);
 }

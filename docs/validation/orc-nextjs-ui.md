@@ -1,5 +1,7 @@
 # ORC Studio validation
 
+Historical validation of the simulated UI. Demo controls and seeded operational data have since been removed. Current native CLI validation is recorded separately in [orc-native-runtime.md](orc-native-runtime.md); the results below do not establish native runtime or production readiness.
+
 Controller review completed on 2026-10-08. Workflow/persistence acceptance was reviewed at `d163845`; final readability/scrollbar polish and local integration were reviewed at `00d48ec` on `main`. Luna implemented the product; the controller independently reviewed source, ran the final gates from the main checkout, and operated the browser. The production preview is `http://127.0.0.1:3001/`.
 
 ## Automated checks

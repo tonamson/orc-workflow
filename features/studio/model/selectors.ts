@@ -68,5 +68,5 @@ export function runningSessions(state: AppState): Session[] {
 
 export function visibleActors(state: AppState, roomId: string): Session[] {
   if (!visibleRooms(state).some(room => room.id === roomId) || state.ui.role === 'client') return [];
-  return roomSessions(state, roomId).filter(session => session.processConfirmed);
+  return roomSessions(state, roomId).filter(session => session.processConfirmed || (session.runtimeMotion?.phase === 'exit' && !session.runtimeMotion.completed));
 }

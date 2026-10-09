@@ -1,9 +1,9 @@
 import 'reflect-metadata';
 import type { DataSource } from 'typeorm';
-import { createDemoState } from '../../features/studio/model/seed';
+import { createEmptyState } from '../../features/studio/model/empty';
 import { studioReducer } from '../../features/studio/model/reducer';
 import type { AppState } from '../../features/studio/model/types';
-import { eventBelongsToContext, validateMutationRequest, type DemoRequestContext, type StudioMutationRequest } from './validation';
+import { eventBelongsToContext, validateMutationRequest, type RequestContext, type StudioMutationRequest } from './validation';
 import { StudioEventEntity, StudioSnapshotEntity, CliConversationReferenceEntity } from './entities';
 
 export type PersistenceResult = { status: 'applied' | 'duplicate' | 'conflict' | 'rejected'; revision: number; state: AppState; code?: string };
@@ -18,9 +18,9 @@ function stableJson(value: unknown): string {
 }
 
 export class StudioPersistenceStore {
-  constructor(private readonly source: DataSource, private readonly stateId = 'studio') {}
+  constructor(private readonly source: DataSource, private readonly stateId = 'orc-studio-operational-v1', private readonly initialState: () => AppState = createEmptyState) {}
 
-  private mergeUi(state: PersistedState, ui = createDemoState().ui): AppState {
+  private mergeUi(state: PersistedState, ui = this.initialState().ui): AppState {
     return { ...state, ui };
   }
 
@@ -28,7 +28,7 @@ export class StudioPersistenceStore {
     const repo = this.source.getRepository(StudioSnapshotEntity);
     let row = await repo.findOneBy({ stateId: this.stateId });
     if (!row) {
-      const seed = createDemoState();
+      const seed = this.initialState();
       const initial = { stateId: this.stateId, revision: 0, state: this.withoutUi(seed), updatedAt: new Date() };
       await repo.createQueryBuilder().insert().values(initial as never).orIgnore().execute();
       row = await repo.findOneBy({ stateId: this.stateId });
@@ -86,8 +86,8 @@ export class StudioPersistenceStore {
     });
   }
 
-  private requestUi(state: PersistedState, context: DemoRequestContext): AppState['ui'] {
-    const base = createDemoState().ui;
+  private requestUi(state: PersistedState, context: RequestContext): AppState['ui'] {
+    const base = this.initialState().ui;
     return { ...base, role: context.role, workspaceId: state.workspaces[context.workspaceId] ? context.workspaceId : base.workspaceId, clientViewerId: context.clientViewerId };
   }
 

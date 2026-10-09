@@ -7,11 +7,12 @@ export type Reasoning =
 export type Workspace = { id: string; customerId: string; name: string; repoPath: string };
 export type ClientViewer = { id: string; customerId: string; allowedWorkspaceIds: string[] };
 export type TerminalMessage = { id: string; kind: 'input' | 'output' | 'status'; text: string; timestamp: number };
+export type RuntimeMotion = { phase: 'assign' | 'report' | 'exit'; sequence: number; completed?: boolean; origin?: 'supervisor-desk' };
 export type Session = {
   id: string; workspaceId: string; roomId: string; seatSlot: 0 | 1 | 2; agentName: string; avatar: Avatar;
   role: 'supervisor' | 'lead' | 'peer'; provider: Provider; model: string | null; reasoning: Reasoning;
   skills: string[]; lifecycle: 'starting' | 'active' | 'closing' | 'disconnected' | 'error';
-  processConfirmed: boolean; lastUpdate: number; messages: TerminalMessage[]; closeError?: string;
+  processConfirmed: boolean; lastUpdate: number; messages: TerminalMessage[]; closeError?: string; nativeRuntime?: true; runtimeRunId?: string; runtimeMotion?: RuntimeMotion;
 };
 export type Room = { id: string; workspaceId: string; departmentId: string | null; name: string; kind: 'work' | 'supervisor' | 'lobby' | 'meeting'; template: 'ui' | 'engineering' | 'supervisor' | 'lobby' | 'meeting' };
 export type Department = { id: string; workspaceId: string; name: string; leadSessionId: string | null };
@@ -38,12 +39,11 @@ export type StudioEvent =
   | { type: 'ui.select-record'; recordId: string | null }
   | { type: 'ui.search'; search: string }
   | { type: 'ui.record-filter'; filter: string }
+  | { type: 'runtime.workspaces'; workspaces: Array<{ id: string; name: string; path: string; status: 'ready' | 'unavailable' }> }
+  | { type: 'runtime.run'; run: { id: string; workspaceId: string; taskId: string; status: string; phase: 'supervisor_delegation' | 'delegating' | 'peer_running' | 'supervisor_reporting' | 'done'; prompt: string; report: string | null; finalReport?: string | null; sessions: Array<{ id: string; role: 'supervisor' | 'peer'; status: string; processConfirmed: boolean; nativeConversationId: string | null; model: string | null; reasoningEffort: string | null; lastSequence?: number; startedAt: string | null }> } | null }
+  | { type: 'runtime.runs'; workspaceId: string | null; runs: Array<{ id: string; workspaceId: string; taskId: string; status: string; phase: 'supervisor_delegation' | 'delegating' | 'peer_running' | 'supervisor_reporting' | 'done'; prompt: string; report: string | null; finalReport?: string | null; sessions: Array<{ id: string; role: 'supervisor' | 'peer'; status: string; processConfirmed: boolean; nativeConversationId: string | null; model: string | null; reasoningEffort: string | null; lastSequence?: number; startedAt: string | null }> }> }
+  | { type: 'runtime.motion-finished'; sessionId: string; sequence: number }
   | { type: 'persistence.hydrate'; state: AppState }
-  | { type: 'ui.departments-resize'; count: number }
-  | { type: 'ui.department-create'; name: string }
-  | { type: 'demo.overflow-reset' }
-  | { type: 'demo.seed-reset' }
-  | { type: 'session.start-requested'; id: string; workspaceId: string; roomId: string; agentName: string; avatar: Avatar; provider: Provider; model: string | null; reasoning: Reasoning; skills: string[] }
   | { type: 'session.started'; sessionId: string }
   | { type: 'session.config'; sessionId: string; provider: Provider; model: string | null; reasoning: Reasoning }
   | { type: 'session.message'; sessionId: string; message: TerminalMessage }
@@ -53,7 +53,6 @@ export type StudioEvent =
   | { type: 'session.close-failed'; sessionId: string; message: string }
   | { type: 'session.closed'; sessionId: string }
   | { type: 'task.assigned'; taskId: string; sessionId: string }
-  | { type: 'task.assign-requested'; taskId: string; provider: Provider }
   | { type: 'task.status'; taskId: string; status: TaskStatus }
   | { type: 'approval.responded'; taskId: string; accepted: boolean }
   | { type: 'report.submitted'; report: Report }

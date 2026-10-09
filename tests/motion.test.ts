@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDemoAdapter } from '../features/demo/adapter';
-import { routeFor, startMotion, type MotionTarget } from '../features/office/motion';
+import { officeExitRoute, officeReportRoute, routeFor, startMotion, type MotionTarget } from '../features/office/motion';
 import { layoutOffice } from '../features/office/geometry';
 import { createDemoState } from '../features/studio/model/seed';
-import { studioReducer } from '../features/studio/model/reducer';
 
-describe('agent motion and demo cleanup', () => {
+describe('office motion geometry', () => {
   const room = layoutOffice(Object.values(createDemoState().rooms)).rooms.find(item => item.room.id === 'room-ui')!;
   it('routes assigned agents through the doorway aisle to a standing seat', () => {
     const points = routeFor(room, 2, 'assign', null);
@@ -19,86 +17,34 @@ describe('agent motion and demo cleanup', () => {
     expect(Math.max(...route.map(point => point.y))).toBeLessThan(supervisor.source[1] + supervisor.source[3] + 30);
   });
   it('reports beside the Lead and uses the exit when this room has no Lead', () => {
-    const report = routeFor(room, 1, 'report', 0);
-    expect(report.at(-1)).toEqual({ x: 137, y: 785 });
+    expect(routeFor(room, 1, 'report', 0).at(-1)).toEqual({ x: 137, y: 785 });
     expect(routeFor(room, 1, 'report', null).at(-1)?.y).toBe(810);
     expect(routeFor(room, 1, 'report', 1).at(-1)?.y).toBe(810);
   });
-  it('disposes pending demo events without changing the later workspace', () => {
-    vi.useFakeTimers();
-    let state = createDemoState();
-    state = studioReducer(state, { type: 'session.start-requested', id: 'session-pending', workspaceId: 'demo-website', roomId: 'room-ui', agentName: 'Pending', avatar: 'Mika', provider: 'codex', model: null, reasoning: { kind: 'unknown' }, skills: ['frontend'] });
-    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
-    adapter.receive('session-pending');
-    adapter.dispose();
-    state = studioReducer(state, { type: 'ui.workspace', workspaceId: 'demo-empty' });
-    vi.runAllTimers();
-    expect(state.ui.workspaceId).toBe('demo-empty');
-    expect(state.sessions['session-pending'].lifecycle).toBe('starting');
-    vi.useRealTimers();
-  });
-  it('receive assigns queued work to an existing eligible session', () => {
-    vi.useFakeTimers();
-    let state = createDemoState();
-    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
-    adapter.receive('session-nova');
-    vi.runAllTimers();
-    const task = state.tasks['task-10'];
-    expect(task.status).toBe('assigned');
-    expect(task.sessionId).toBe('session-sage');
-    expect(state.sessions[task.sessionId!].lifecycle).toBe('active');
-    adapter.dispose();
-    vi.useRealTimers();
-  });
-  it('receive creates a confirmed reservation when eligible sessions are busy', () => {
-    vi.useFakeTimers();
-    let state = createDemoState();
-    state.tasks['task-10'] = { ...state.tasks['task-10'], status: 'assigned', sessionId: 'session-sage' };
-    state.tasks['task-08'] = { ...state.tasks['task-08'], status: 'assigned', sessionId: 'session-rune' };
-    state.tasks['task-11'] = { ...state.tasks['task-11'], status: 'assigned', sessionId: 'session-atlas' };
-    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
-    adapter.receive('session-nova');
-    vi.runAllTimers();
-    const task = state.tasks['task-12'];
-    expect(task.status).toBe('assigned');
-    expect(task.sessionId).toBe('session-demo-001');
-    expect(state.sessions[task.sessionId!].lifecycle).toBe('active');
-    expect(state.sessions[task.sessionId!].processConfirmed).toBe(true);
-    adapter.dispose();
-    vi.useRealTimers();
-  });
-  it('confirms a received session after a room switch without redirecting the view', () => {
-    vi.useFakeTimers();
-    let state = createDemoState();
-    state = studioReducer(state, { type: 'ui.navigate', roomId: 'room-ui' });
-    state = studioReducer(state, { type: 'ui.select-session', sessionId: 'session-mika' });
-    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
-    adapter.receive('session-mika');
-    const task = Object.values(state.tasks).find(item => item.status === 'assigned' && item.sessionId !== 'session-mika');
-    expect(task).toBeDefined();
-    const assignedSessionId = task!.sessionId!;
-
-    state = studioReducer(state, { type: 'ui.navigate', roomId: 'room-engineering' });
-    vi.advanceTimersByTime(650);
-    expect(state.sessions[assignedSessionId].lifecycle).toBe('active');
-    expect(state.sessions[assignedSessionId].processConfirmed).toBe(true);
-    expect(state.ui.roomId).toBe('room-engineering');
-    expect(state.ui.selectedSessionId).toBeNull();
-    adapter.dispose();
-    vi.useRealTimers();
-  });
-  it('submits a scheduled report after navigating to another room in the same workspace', () => {
-    vi.useFakeTimers();
-    let state = createDemoState();
-    state.tasks['task-09'] = { ...state.tasks['task-09'], status: 'working', sessionId: 'session-mika' };
-    const adapter = createDemoAdapter(() => state, event => { state = studioReducer(state, event); });
-    adapter.submitReport('session-mika');
-    state = studioReducer(state, { type: 'ui.navigate', roomId: 'room-engineering' });
-    vi.advanceTimersByTime(700);
-    expect(state.ui.roomId).toBe('room-engineering');
-    expect(state.reports['report-task-09']?.sessionId).toBe('session-mika');
-    adapter.dispose();
-    vi.useRealTimers();
+  it('pairs each template and mirror doorway with its outside edge and reports through the hall to the desk', () => {
+    const state = createDemoState();
+    state.rooms['extra-engineering'] = { ...state.rooms['room-engineering'], id: 'extra-engineering', name: 'Extra engineering' };
+    state.rooms['extra-ui'] = { ...state.rooms['room-ui'], id: 'extra-ui', name: 'Extra UI' };
+    const rooms = layoutOffice(Object.values(state.rooms)).rooms;
+    const cases = [
+      { id: 'room-ui', door: 656, outside: 692 },
+      { id: 'room-engineering', door: 930, outside: 894 },
+      { id: 'extra-engineering', door: 1560, outside: 1596 },
+      { id: 'extra-ui', door: 26, outside: -10 },
+    ];
+    for (const item of cases) {
+      const room = rooms.find(candidate => candidate.room.id === item.id)!;
+      const route = routeFor(room, 1, 'exit', null);
+      expect(room.mirrored).toBe(item.id.startsWith('extra-'));
+      expect(route.at(-2)?.x).toBe(item.door);
+      expect(route.at(-1)?.x).toBe(item.outside);
+    }
+    const ui = rooms.find(item => item.room.id === 'room-ui')!;
+    const report = officeReportRoute(ui, 1);
+    expect(report.at(-1)).toEqual({ x: 793, y: 330 });
+    expect(report).toContainEqual({ x: 793, y: 424 });
+    expect(report).toContainEqual({ x: 793, y: 810 });
+    expect(officeExitRoute(1000).at(-1)?.y).toBeGreaterThan(1000 + 52 * 300 / 180);
   });
   it('cancels Web Animations without completing the lifecycle', () => {
     const onFinish = vi.fn(); const cancel = vi.fn();

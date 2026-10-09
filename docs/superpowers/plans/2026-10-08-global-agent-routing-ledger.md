@@ -1,0 +1,12 @@
+# Global routing execution ledger
+
+- User resumed execution after an explicit pause. Scope remains global settings, allowed effort selection and native Codex routing; other runners are configurable but blocked until connected.
+- Backend owner: `/root/luna_routing_backend`; frontend owner: `/root/luna_routing_frontend`; root reviews and runs production/browser/native validation. Shared policy contract belongs to backend; UI consumes it.
+- Existing dirty workspace is preserved. No commits, resets or provider authentication/trust changes are part of this execution.
+- Task 1 complete: policy validation, global PostgreSQL revision/CAS, run snapshots, Supervisor decision parsing and native launch controls.
+- Task 2 complete: settings navigation/dialog, global save/reload, allowed effort controls and persisted routing decision display.
+- Root pre-review: saving unsupported Supervisor profiles must be permitted while launching them is rejected before creating a run; OpenCode uses an explicit `default` placeholder rather than invented effort support. Native decision validation errors must retain the Supervisor. Backend acknowledged and applied these shared-policy corrections.
+- Final validation complete on 2026-10-09: 88 tests / 19 files, TypeScript/production build and diff whitespace checks passed. Root exercised actual save/reload/conflict UI, native Codex routing, unsupported AGY no-spawn, same-UUID resume preserving revision-2 medium effort after global revision-3 high-only, report/finalization and owned-process cleanup. Desktop/mobile review caught and verified Luna fixes for flex sizing, contrast and historical status replay.
+- Disposable routing workspace/run/events removed after both native sessions closed. Preview restarted with empty workspaces/runs; final user configuration retained at revision 6. No new commits or provider authentication changes.
+- Detailed evidence and scope limits: [Global routing validation](../../validation/global-agent-routing.md). Only Codex runner is connected; manual Supervisor/Peer handoff and local endpoint guard remain.
+- Follow-up completion check found and reproduced a late-response workspace race under actual browser 3G throttling. Luna isolated terminal callbacks/history by workspace generation and corrected scoped session counts/status; root repeated the actual delayed launch, same-UUID reattachment/resume and process cleanup. Final gates now 91 tests / 19 files, production build and diff checks passed. Three disposable scope-check tasks were removed; global revision 6 remains.
