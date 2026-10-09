@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
+import { createTerminalInputBatcher, type TerminalInputBatcher } from './terminal-input-batcher';
 import { applyTerminalResizeInOrder, createTerminalResizeGate, isRuntimeEventAfterBaseline, replayTerminalEvents, runtimeStatusLabel, sessionConnectionLabel, shouldPollRuntimeRun, type ServerHealth } from './runtime-lifecycle';
 import type { RoutingDecision, RoutingPolicySnapshot } from '../settings/routing-policy';
 
@@ -60,10 +61,12 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
   const canResumeSession = !!run && run.phase !== 'done' && !!activeSession?.nativeConversationId && !activeSession.processConfirmed && ['interrupted', 'closed', 'error'].includes(activeSession.status);
   const runRef = useRef<RuntimeRun | null>(run);
   const onRunChangeRef = useRef(onRunChange);
+  const scopeIsCurrentRef = useRef(scopeIsCurrent);
   const mountedRef = useRef(false);
   const activeSessionIdRef = useRef(activeSessionId);
   runRef.current = run;
   onRunChangeRef.current = onRunChange;
+  scopeIsCurrentRef.current = scopeIsCurrent;
   activeSessionIdRef.current = activeSessionId;
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -75,11 +78,11 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
   const historyReplaySessionsRef = useRef(new Set<string>());
   const eventStreamOpenRef = useRef(new Set<string>());
   const recoveryQueues = useRef<Record<string, Promise<void>>>({});
-  const inputQueues = useRef<Record<string, Promise<void>>>({});
   const resizeGateRef = useRef(createTerminalResizeGate());
   const blockedInput = useRef(new Set<string>());
   const connectedInput = useRef(new Set<string>());
   const sendInputRef = useRef<(sessionId: string, data: string) => void>(() => undefined);
+  const inputBatcherRef = useRef<TerminalInputBatcher | null>(null);
 
   const requestTerminalResize = (terminal: Terminal, sessionId: string) => {
     const session = runRef.current?.sessions.find(item => item.id === sessionId);
@@ -93,13 +96,34 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
     }).catch(() => undefined);
   };
 
-  const isCurrentWorkspace = () => mountedRef.current && scopeIsCurrent(mountedRef.current);
+  const isCurrentWorkspace = () => mountedRef.current && scopeIsCurrentRef.current(mountedRef.current);
   const isCurrentRun = (runId: string) => isCurrentWorkspace() && runRef.current?.id === runId;
   const selectSession = (sessionId: string) => { activeSessionIdRef.current = sessionId; setActiveSessionId(sessionId); };
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    inputBatcherRef.current = createTerminalInputBatcher(async (sessionId, data) => {
+      const session = runRef.current?.sessions.find(item => item.id === sessionId);
+      if (!isCurrentWorkspace() || !hasConfirmedNativeProcess(session) || !connectedInput.current.has(sessionId) || blockedInput.current.has(sessionId)) throw new Error('terminal_input_unavailable');
+      const response = await fetch(`/api/runtime/sessions/${encodeURIComponent(sessionId)}/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data }) });
+      if (!response.ok) throw new Error('terminal_input_failed');
+    }, {
+      onFailure: sessionId => {
+        blockedInput.current.add(sessionId);
+        if (!isCurrentWorkspace()) return;
+        inputBlockedSessionRef.current = sessionId;
+        setInputBlockedSessionId(sessionId);
+        setError('Lệnh terminal chưa được xác nhận. Đã tạm khóa nhập để tránh gửi lặp.');
+      },
+      onOverflow: sessionId => {
+        blockedInput.current.add(sessionId);
+        if (!isCurrentWorkspace()) return;
+        inputBlockedSessionRef.current = sessionId;
+        setInputBlockedSessionId(sessionId);
+        setError('Bộ đệm nhập terminal đã đầy. Đã xóa phần chưa gửi và tạm khóa nhập để tránh gửi sai thứ tự.');
+      },
+    });
+    return () => { mountedRef.current = false; inputBatcherRef.current?.dispose(); inputBatcherRef.current = null; };
   }, []);
 
   const syncNativeConnection = useCallback((sessionId: string) => {
@@ -113,18 +137,8 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
 
   sendInputRef.current = (sessionId, data) => {
     const session = runRef.current?.sessions.find(item => item.id === sessionId);
-    if (!sessionId || !hasConfirmedNativeProcess(session) || !connectedInput.current.has(sessionId) || blockedInput.current.has(sessionId)) return;
-    const previous = inputQueues.current[sessionId] ?? Promise.resolve();
-    inputQueues.current[sessionId] = previous.then(async () => {
-      if (blockedInput.current.has(sessionId) || !connectedInput.current.has(sessionId) || !hasConfirmedNativeProcess(runRef.current?.sessions.find(item => item.id === sessionId))) return;
-      try {
-        const response = await fetch(`/api/runtime/sessions/${encodeURIComponent(sessionId)}/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data }) });
-        if (!response.ok) throw new Error('terminal_input_failed');
-      } catch {
-        if (!isCurrentWorkspace()) return;
-        blockedInput.current.add(sessionId); inputBlockedSessionRef.current = sessionId; setInputBlockedSessionId(sessionId); setError('Lệnh terminal chưa được xác nhận. Đã tạm khóa nhập để tránh gửi lặp.');
-      }
-    });
+    if (!sessionId || !isCurrentWorkspace() || !hasConfirmedNativeProcess(session) || !connectedInput.current.has(sessionId) || blockedInput.current.has(sessionId)) return;
+    inputBatcherRef.current?.enqueue(sessionId, data);
   };
 
   const writeEvent = useCallback((terminal: Terminal, event: RuntimeEvent) => {
@@ -234,6 +248,7 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
       };
       stream.onerror = () => {
         if (!alive) return;
+        inputBatcherRef.current?.clear(activeSessionId);
         eventStreamOpenRef.current.delete(activeSessionId);
         syncNativeConnection(activeSessionId);
         const currentStatus = runRef.current?.sessions.find(session => session.id === activeSessionId)?.status;
@@ -244,7 +259,7 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
         setError('Đang khôi phục kết nối terminal…');
       };
     }).catch(() => { historyReplaySessionsRef.current.delete(activeSessionId); if (alive) setError('Không tải được lịch sử terminal đã lưu.'); });
-    return () => { alive = false; historyReplaySessionsRef.current.delete(activeSessionId); activeIdRef.current = ''; eventStreamOpenRef.current.delete(activeSessionId); connectedInput.current.delete(activeSessionId); setTerminalConnected(false); streamRef.current?.close(); streamRef.current = null; };
+    return () => { alive = false; inputBatcherRef.current?.clear(activeSessionId); historyReplaySessionsRef.current.delete(activeSessionId); activeIdRef.current = ''; eventStreamOpenRef.current.delete(activeSessionId); connectedInput.current.delete(activeSessionId); setTerminalConnected(false); streamRef.current?.close(); streamRef.current = null; };
   }, [activeSessionId, terminalReady, writeEvent, syncNativeConnection]);
 
   useEffect(() => { if (terminalRef.current) terminalRef.current.options.disableStdin = activeSession?.status !== 'active' || !terminalConnected || inputBlockedSessionId === activeSessionId; }, [activeSession?.status, activeSessionId, inputBlockedSessionId, terminalConnected]);
@@ -398,6 +413,7 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
       if (!isRunSelected()) return;
       if (!result.run) throw new Error('Máy chủ không trả trạng thái runtime sau khi tiếp tục.');
       blockedInput.current.delete(sessionId);
+      inputBatcherRef.current?.reset(sessionId);
       if (inputBlockedSessionRef.current === sessionId) { inputBlockedSessionRef.current = null; setInputBlockedSessionId(null); }
       runRef.current = result.run;
       setRun(result.run); onRunChange(result.run); setHistory(items => items.map(item => item.id === result.run!.id ? result.run! : item));
@@ -424,7 +440,7 @@ export function TerminalWorkspace({ workspace, historyRuns, selectedSessionId, s
       const runBody = await runResponse.json() as { run?: RuntimeRun };
       if (!isSessionSelected()) return;
       if (!runBody.run || runBody.run.workspaceId !== workspace?.id || !runBody.run.sessions.some(session => session.id === sessionId)) throw new Error('Phiên không còn thuộc workspace đang mở.');
-      blockedInput.current.delete(sessionId); inputBlockedSessionRef.current = null; setInputBlockedSessionId(null);
+      blockedInput.current.delete(sessionId); inputBatcherRef.current?.reset(sessionId); inputBlockedSessionRef.current = null; setInputBlockedSessionId(null);
       runRef.current = runBody.run; setRun(runBody.run); onRunChange(runBody.run); setHistory(items => items.map(item => item.id === runBody.run!.id ? runBody.run! : item));
       setError(terminalConnected ? '' : 'Phiên đang chạy; đang chờ kết nối terminal trước khi nhập tiếp.');
     } catch (cause) { if (isSessionSelected()) setError(cause instanceof Error ? cause.message : 'Không thể xác minh kết nối terminal.'); }

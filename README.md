@@ -41,7 +41,7 @@ Changing global settings affects future tasks. Existing tasks and exact-conversa
 
 Use **Kiểm tra CLI** in Settings to check the providers selected in the current draft on the server. Results show executable availability, a version when verifiable, and authentication status when the CLI exposes a noninteractive check. Runner support is separate from this CLI test and does not appear in its result. Testing does not save the draft or open an agent session. Codex uses the same `ORC_CODEX_BIN` override as the runtime; other providers are resolved from the server's `PATH`.
 
-These checks are local diagnostics, not an LLM request or proof that a selected model/effort works. AGY is checked for executable presence without launching its GUI; its authentication remains unverified. An installed Claude, AGY or OpenCode executable still requires an ORC runner before it can receive work.
+Codex, Claude and OpenCode use local version/authentication diagnostics. AGY's **Kiểm tra kết nối** sends one fixed, minimal no-tools prompt from an empty temporary directory and verifies its JSON response before showing **Kết nối đã xác minh**. It uses the CLI's existing configuration, exits within a bounded timeout, and removes its temporary directory. It does not claim a particular Google login method or validate the model/effort selected for future tasks. An installed Claude, AGY or OpenCode executable still requires an ORC runner before it can receive work.
 
 ## Native skills
 

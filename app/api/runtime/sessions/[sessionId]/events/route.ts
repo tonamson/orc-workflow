@@ -16,7 +16,7 @@ export async function GET(request: Request, context: { params: Promise<{ session
       if (!request.headers.get('accept')?.includes('text/event-stream')) {
         return Response.json({ events: await service.listEvents(sessionId, after) }, { headers: { 'Cache-Control': 'no-store' } });
       }
-      return streamRuntimeEvents(request, (cursor, limit) => service.listEvents(sessionId, cursor, limit), after);
+      return streamRuntimeEvents(request, sessionId, (cursor, limit) => service.listEvents(sessionId, cursor, limit), after);
     } catch (error) { return runtimeError(error); }
   }
   return Response.json({ error: 'local_runtime_only' }, { status: 403 });

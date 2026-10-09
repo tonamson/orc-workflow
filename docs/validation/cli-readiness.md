@@ -2,7 +2,7 @@
 
 Validated on 2026-10-09 using the production preview and actual installed commands. Luna implemented the feature; the parent reviewed the source, requested corrections, and exercised Chrome and the API.
 
-Settings exposes one **Kiểm tra CLI** action per unique provider selected in the current draft. Testing does not save that draft, start an agent, or send an LLM prompt. Results show availability, verifiable version/authentication, timestamp and safe failure information. Runner support is separate and is not part of the test result. A successful version check displays **CLI phản hồi**; unavailable authentication displays the neutral **Đăng nhập chưa xác minh**.
+Settings exposes one test action per unique provider selected in the current draft. Testing does not save that draft or start an ORC agent. Codex, Claude and OpenCode use local version/authentication checks. AGY's **Kiểm tra kết nối** sends a fixed minimal no-tools prompt through the installed native CLI, from an empty temporary directory. It accepts only an exit-zero JSON `SUCCESS` result with a completed turn and the exact marker after trimming surrounding whitespace. Results show availability, version, timestamp and safe failure information. Runner support is separate and no longer appears in any Settings card or test result.
 
 ## Actual results
 

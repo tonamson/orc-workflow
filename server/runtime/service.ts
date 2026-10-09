@@ -12,6 +12,7 @@ import { parseCodexStatus } from './status';
 import { canonicalWorkspace } from './workspace-paths';
 import { parseRoutingDecision, parseRoutingPolicy, type RoutingDecision, type RoutingPolicySnapshot } from '../../features/settings/routing-policy';
 import { getRoutingSettings } from './routing-settings';
+import { runtimeEventNotifier } from './sse';
 
 const MAX_INPUT_BYTES = 16 * 1024;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -634,6 +635,7 @@ export class NativeRuntimeService {
     let offset = 0;
     while (offset < bytes.length) {
       let limitReached = false;
+      let inserted = false;
       await source.transaction(async manager => {
         const sessions = manager.getRepository(RuntimeSessionEntity);
         const current = await sessions.createQueryBuilder('session').setLock('pessimistic_write').where('session.id = :id', { id: sessionId }).getOne();
@@ -644,8 +646,10 @@ export class NativeRuntimeService {
         await sessions.save(current);
         await manager.getRepository(RuntimeEventEntity).insert({ sessionId, sequence, kind: 'output', text: null, dataBase64: data.toString('base64'), status: null, createdAt: new Date() });
         offset += data.length;
+        inserted = true;
         if (current.outputBytes >= MAX_OUTPUT_BYTES) limitReached = true;
       });
+      if (inserted) runtimeEventNotifier.notify(sessionId);
       if (limitReached) {
         await this.appendEvent(sessionId, { kind: 'error', status: 'error', text: 'The 10 MiB PTY output limit was reached; the terminal was stopped to keep runtime storage bounded.' });
         await this.closeSession(sessionId);
@@ -656,6 +660,7 @@ export class NativeRuntimeService {
 
   private async appendEvent(sessionId: string, event: { kind: 'status' | 'resize' | 'error' | 'exit'; status?: string; text?: string }): Promise<void> {
     const source = await this.source();
+    let inserted = false;
     await source.transaction(async manager => {
       const repo = manager.getRepository(RuntimeSessionEntity);
       const row = await repo.createQueryBuilder('session').setLock('pessimistic_write').where('session.id = :id', { id: sessionId }).getOne();
@@ -663,7 +668,9 @@ export class NativeRuntimeService {
       const sequence = row.lastSequence + 1;
       row.lastSequence = sequence; row.updatedAt = new Date(); await repo.save(row);
       await manager.getRepository(RuntimeEventEntity).insert({ sessionId, sequence, kind: event.kind, text: event.text?.slice(0, MAX_EVENT_BYTES), dataBase64: null, status: event.status || null, createdAt: new Date() });
+      inserted = true;
     });
+    if (inserted) runtimeEventNotifier.notify(sessionId);
   }
 
   private async onExit(sessionId: string, exitCode: number, entry?: LiveProcess): Promise<void> {

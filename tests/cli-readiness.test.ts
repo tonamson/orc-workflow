@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, chmod, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, chmod, writeFile, rm, access, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { checkCliReadiness, resolveCliExecutable, runBoundedCliCommand, type CliCommandResult } from '../server/runtime/cli-readiness';
@@ -7,6 +7,75 @@ import { checkCliReadiness, resolveCliExecutable, runBoundedCliCommand, type Cli
 const ok: CliCommandResult = { code: 0, stdout: 'codex 1.2.3', stderr: '' };
 
 describe('CLI readiness diagnostics', () => {
+  it('verifies AGY connectivity only when its bounded no-tools prompt returns the exact JSON marker', async () => {
+    let probeCwd = '';
+    const run = vi.fn(async (_executable: string, args: string[], options?: { timeoutMs?: number; cwd?: string }) => {
+      if (args[0] === '--version') return { code: 0, stdout: 'AGY 1.3.2', stderr: '' };
+      probeCwd = options?.cwd ?? '';
+      expect(args).toEqual(['-p', 'Reply exactly ORC_AGY_OK. Do not use tools, read files, execute commands, or modify anything.', '--mode', 'plan', '--output-format', 'json', '--print-timeout', '20s']);
+      expect(options?.timeoutMs).toBeLessThanOrEqual(25_000);
+      expect(options?.timeoutMs).toBeGreaterThan(0);
+      return { code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: 'ORC_AGY_OK', num_turns: 1, is_error: false }), stderr: '' };
+    });
+
+    const result = await checkCliReadiness('agy', { findExecutable: () => '/bin/agy', run });
+    expect(result).toMatchObject({ installed: true, version: '1.3.2', authentication: 'unknown', connectionVerified: true, runnerSupported: false, orcReady: false });
+    await expect(access(probeCwd)).rejects.toThrow();
+  });
+
+  it('accepts whitespace around the exact AGY response marker', async () => {
+    const run = vi.fn().mockResolvedValueOnce({ code: 0, stdout: 'AGY 1.3.2', stderr: '' }).mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: '\n ORC_AGY_OK \n', num_turns: 1 }), stderr: '' });
+    const result = await checkCliReadiness('agy', { findExecutable: () => '/bin/agy', run });
+    expect(result.connectionVerified).toBe(true);
+  });
+
+  it('does not verify AGY connection from auth errors, malformed JSON, other replies, or zero exit alone', async () => {
+    const cases = [
+      { code: 1, stdout: JSON.stringify({ status: 'ERROR', response: 'Login required ORC_AGY_OK', num_turns: 1 }), stderr: '' },
+      { code: 0, stdout: 'ORC_AGY_OK', stderr: '' },
+      { code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: 'different text', num_turns: 1 }), stderr: '' },
+      { code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: { text: 'ORC_AGY_OK' }, num_turns: 1 }), stderr: '' },
+      { code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: 'ORC_AGY_OK', num_turns: 0 }), stderr: '' },
+      { code: 0, stdout: JSON.stringify({ status: 'SUCCESS', response: 'ORC_AGY_OK', num_turns: 1, is_error: true }), stderr: '' },
+    ];
+    for (const probeResult of cases) {
+      const run = vi.fn().mockResolvedValueOnce({ code: 0, stdout: 'AGY 1.3.2', stderr: '' }).mockResolvedValueOnce(probeResult);
+      const result = await checkCliReadiness('agy', { findExecutable: () => '/bin/agy', run });
+      expect(result.connectionVerified).toBe(false);
+      expect(result.authentication).toBe('unknown');
+      expect(result.orcReady).toBe(false);
+    }
+  });
+
+  it('passes the isolated cwd and 25-second timeout through the default process runner', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'orc-cli-default-runner-'));
+    try {
+      const executable = path.join(directory, 'agy');
+      await writeFile(executable, `#!/usr/bin/env node\nconst fs=require('node:fs');const path=require('node:path');const args=process.argv.slice(2);if(args[0]==='--version'){process.stdout.write('AGY 1.3.2');process.exit(0)}setTimeout(()=>{const cwd=process.cwd();const entries=fs.readdirSync(cwd);const isolated=path.basename(cwd).startsWith('orc-cli-readiness-')&&entries.length===0;fs.writeFileSync(path.join(__dirname,'cwd.json'),JSON.stringify({cwd,isolated,entries}));process.stdout.write(JSON.stringify({status:isolated?'SUCCESS':'ERROR',response:isolated?'ORC_AGY_OK':'wrong cwd',num_turns:1}));},2600);\n`);
+      await chmod(executable, 0o755);
+      const result = await checkCliReadiness('agy', { findExecutable: () => executable });
+      const cwdCheck = JSON.parse(await readFile(path.join(directory, 'cwd.json'), 'utf8')) as { cwd: string; isolated: boolean; entries: string[] };
+      expect(cwdCheck.cwd).toContain('orc-cli-readiness-');
+      expect(cwdCheck.entries).toEqual([]);
+      expect(cwdCheck).toMatchObject({ isolated: true });
+      expect(result).toMatchObject({ version: '1.3.2', connectionVerified: true, diagnostic: 'complete' });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('reports AGY probe timeouts without exposing output and cleans up its temporary directory', async () => {
+    let probeCwd = '';
+    const run = vi.fn(async (_executable: string, args: string[], options?: { timeoutMs?: number; cwd?: string }) => {
+      if (args[0] === '--version') return { code: 0, stdout: 'AGY 1.3.2', stderr: '' };
+      probeCwd = options?.cwd ?? '';
+      expect(options?.timeoutMs).toBeLessThanOrEqual(25_000);
+      throw new Error('cli_probe_timeout');
+    });
+    const result = await checkCliReadiness('agy', { findExecutable: () => '/bin/agy', run });
+    expect(result).toMatchObject({ version: '1.3.2', diagnostic: 'timeout', connectionVerified: false });
+    expect(JSON.stringify(result)).not.toContain('cli_probe_timeout');
+    await expect(access(probeCwd)).rejects.toThrow();
+  });
+
   it('resolves a configured bare Codex command through PATH', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'orc-cli-path-'));
     try {

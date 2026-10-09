@@ -17,12 +17,18 @@ const TASK_LABELS: Record<TaskKind, { title: string; description: string }> = {
   review: { title: 'Review / audit', description: 'Rà soát thay đổi và tìm vấn đề' },
 };
 const effortLabel = (value: string) => value === 'default' ? 'Mặc định CLI' : value;
-type Readiness = { provider: RoutingPolicy['supervisor']['provider']; installed: boolean | null; version: string | null; authentication: 'authenticated' | 'unauthenticated' | 'unknown'; testedAt: string; diagnostic: 'complete' | 'timeout' | 'failed'; error?: 'connection' | 'server' };
+type Readiness = { provider: RoutingPolicy['supervisor']['provider']; installed: boolean | null; version: string | null; authentication: 'authenticated' | 'unauthenticated' | 'unknown'; connectionVerified: boolean; testedAt: string; diagnostic: 'complete' | 'timeout' | 'failed'; error?: 'connection' | 'server' };
 function readinessLabel(result: Readiness): string {
   if (result.error === 'connection') return 'Không kết nối được máy chủ kiểm tra. Thử lại.';
   if (result.error === 'server') return 'Máy chủ không kiểm tra được CLI. Thử lại.';
   if (result.installed === false) return 'Không tìm thấy CLI.';
   if (result.installed === null) return 'Chưa thể xác minh CLI.';
+  if (result.provider === 'agy') {
+    const cliStatus = result.version ? `CLI phản hồi · ${result.version}` : 'Đã tìm thấy CLI';
+    if (result.connectionVerified) return `${cliStatus} · Kết nối đã xác minh`;
+    const connectionStatus = result.diagnostic === 'timeout' ? 'Kết nối chưa xác minh · hết thời gian kiểm tra' : result.diagnostic === 'failed' ? 'Không xác minh được kết nối' : 'Kết nối chưa xác minh';
+    return `${cliStatus} · ${connectionStatus}`;
+  }
   if (result.version) {
     const authStatus = result.authentication === 'authenticated' ? 'Đã đăng nhập' : result.authentication === 'unauthenticated' ? 'Chưa đăng nhập' : result.diagnostic === 'timeout' ? 'Đăng nhập chưa xác minh · hết thời gian kiểm tra' : 'Đăng nhập chưa xác minh';
     return `CLI phản hồi · ${result.version} · ${authStatus}`;
@@ -69,13 +75,13 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
       const response = await fetch('/api/runtime/cli-readiness', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider }), signal: controller.signal });
       const body = await response.json() as Readiness & { error?: string };
       if (!response.ok) {
-        if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', testedAt: new Date().toISOString(), diagnostic: 'failed', error: 'server' } }));
+        if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', connectionVerified: false, testedAt: new Date().toISOString(), diagnostic: 'failed', error: 'server' } }));
         return;
       }
       if (!controller.signal.aborted && readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setReadiness(current => ({ ...current, [provider]: body }));
     } catch (cause) {
       if (controller.signal.aborted || readinessGeneration.current !== generation || readinessSequence.current[provider] !== sequence) return;
-      setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', testedAt: new Date().toISOString(), diagnostic: 'failed', error: cause instanceof TypeError ? 'connection' : 'server' } }));
+      setReadiness(current => ({ ...current, [provider]: { provider, installed: null, version: null, authentication: 'unknown', connectionVerified: false, testedAt: new Date().toISOString(), diagnostic: 'failed', error: cause instanceof TypeError ? 'connection' : 'server' } }));
     } finally {
       if (readinessGeneration.current === generation && readinessSequence.current[provider] === sequence) setChecking(current => ({ ...current, [provider]: false }));
     }
@@ -165,7 +171,6 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
           <fieldset className="routing-form-controls" disabled={saving}>
             <section className="routing-supervisor"><div className="routing-section-heading"><div className="routing-title-logo"><ProviderLogo provider={policy.supervisor.provider}/><div><h3>Supervisor</h3><p>Điều phối nhiệm vụ và chọn nhóm tác vụ</p></div></div><label className="routing-fixed-effort">Effort cố định<select aria-label="Effort cố định của Supervisor" value={policy.supervisor.effort} onChange={event => setPolicy({ ...policy, supervisor: { ...policy.supervisor, effort: event.target.value } })}>{saved.providers.find(item => item.id === policy.supervisor.provider)?.efforts.map(effort => <option key={effort} value={effort}>{effortLabel(effort)}</option>)}</select></label></div>
               <div className="routing-fields"><ProviderSelect value={policy.supervisor.provider} providers={saved.providers} onChange={value => { const provider = saved.providers.find(item => item.id === value); if (policy.supervisor.model) setModelResetNotice(true); setPolicy({ ...policy, supervisor: { ...policy.supervisor, provider: value, model: null, effort: provider?.efforts.includes(policy.supervisor.effort) ? policy.supervisor.effort : provider?.efforts[0] ?? policy.supervisor.effort } }); }} /><label>Model ID<input value={policy.supervisor.model ?? ''} onChange={event => setPolicy({ ...policy, supervisor: { ...policy.supervisor, model: event.target.value || null } })} placeholder="Mặc định CLI" autoCapitalize="none" spellCheck={false}/></label></div>
-              <ProviderSupport provider={policy.supervisor.provider} providers={saved.providers}/>
             </section>
           <div className="routing-task-heading"><h3>Nhóm tác vụ</h3><span>3 cấu hình</span></div>
           <div className="routing-task-list">{TASK_KINDS.map(kind => {
@@ -174,12 +179,11 @@ export function RoutingSettings({ open, onClose }: { open: boolean; onClose: () 
             return <section className="routing-task-card" key={kind}><div className="routing-section-heading"><div><h3>{TASK_LABELS[kind].title}</h3><p>{TASK_LABELS[kind].description}</p></div><ProviderLogo provider={profile.provider}/></div>
               <div className="routing-fields"><ProviderSelect value={profile.provider} providers={saved.providers} onChange={value => changeProfile(kind, { provider: value })}/><label>Model ID<input value={profile.model ?? ''} onChange={event => changeProfile(kind, { model: event.target.value || null })} placeholder="Mặc định CLI" autoCapitalize="none" spellCheck={false}/></label></div>
               <fieldset className="routing-efforts"><legend>Effort Supervisor được chọn</legend><div>{provider?.efforts.length ? provider.efforts.map(effort => <label key={effort}><input type="checkbox" checked={profile.allowedEfforts.includes(effort)} disabled={profile.allowedEfforts.length === 1 && profile.allowedEfforts.includes(effort)} onChange={event => changeProfile(kind, { allowedEfforts: event.target.checked ? [...profile.allowedEfforts, effort] : profile.allowedEfforts.filter(value => value !== effort) })}/><span>{effortLabel(effort)}</span></label>) : <span className="routing-no-efforts">Provider chưa khai báo effort.</span>}</div></fieldset>
-              <ProviderSupport provider={profile.provider} providers={saved.providers}/>
             </section>;
           })}</div>
           </fieldset>
-          <section className="routing-readiness" aria-labelledby="routing-readiness-title"><div><h3 id="routing-readiness-title">Kiểm tra CLI</h3><p>Kiểm tra cài đặt và đăng nhập CLI trên máy chủ.</p></div>
-            {[...new Set([policy.supervisor.provider, ...TASK_KINDS.map(kind => policy.profiles[kind].provider)])].map(provider => <div className="routing-readiness-row" key={provider}><div><strong>{ROUTING_PROVIDERS.find(item => item.id === provider)?.label}</strong>{readiness[provider] && <p role="status">{readinessLabel(readiness[provider])}</p>}{readiness[provider] && <small>Đã kiểm tra {new Date(readiness[provider].testedAt).toLocaleString()}</small>}</div><button type="button" className="routing-readiness-button" disabled={checking[provider]} onClick={() => void checkProvider(provider)}>{checking[provider] ? 'Đang kiểm tra…' : readiness[provider] ? 'Kiểm tra lại' : 'Kiểm tra CLI'}</button></div>)}
+          <section className="routing-readiness" aria-labelledby="routing-readiness-title"><div><h3 id="routing-readiness-title">Kiểm tra CLI</h3><p>Kiểm tra CLI và kết nối hiện có trên máy chủ.</p></div>
+            {[...new Set([policy.supervisor.provider, ...TASK_KINDS.map(kind => policy.profiles[kind].provider)])].map(provider => <div className="routing-readiness-row" key={provider}><div><strong>{ROUTING_PROVIDERS.find(item => item.id === provider)?.label}</strong>{readiness[provider] && <p role="status">{readinessLabel(readiness[provider])}</p>}{readiness[provider] && <small>Đã kiểm tra {new Date(readiness[provider].testedAt).toLocaleString()}</small>}</div><button type="button" className="routing-readiness-button" disabled={checking[provider]} onClick={() => void checkProvider(provider)}>{checking[provider] ? 'Đang kiểm tra…' : readiness[provider] ? 'Kiểm tra lại' : provider === 'agy' ? 'Kiểm tra kết nối' : 'Kiểm tra CLI'}</button></div>)}
           </section>
           {modelResetNotice && <p className="routing-model-reset" role="status">Đã xóa model ID khi đổi provider để dùng model mặc định của provider mới.</p>}
         </>}
@@ -198,9 +202,4 @@ function ProviderSelect({ value, providers, onChange }: { value: RoutingPolicy['
 function ProviderLogo({ provider }: { provider: RoutingPolicy['supervisor']['provider'] }) {
   const image = provider === 'agy' ? 'gemini' : provider;
   return <span className="routing-provider-logo"><img src={`/cli/${image}.svg`} alt=""/><span>{provider === 'agy' ? 'AGY / Antigravity' : ROUTING_PROVIDERS.find(item => item.id === provider)?.label}</span></span>;
-}
-
-function ProviderSupport({ provider, providers }: { provider: RoutingPolicy['supervisor']['provider']; providers: RoutingSettingsEnvelope['providers'] }) {
-  const catalogItem = providers.find(item => item.id === provider);
-  return catalogItem && !catalogItem.runnerSupported ? <p className="routing-unsupported"><span aria-hidden="true">●</span> Runner chưa kết nối · cấu hình vẫn được lưu</p> : null;
 }
