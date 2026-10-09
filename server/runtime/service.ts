@@ -5,7 +5,7 @@ import { constants as fsConstants, accessSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as pty from 'node-pty';
-import type { DataSource } from 'typeorm';
+import { Not, type DataSource } from 'typeorm';
 import { getPersistenceDataSource } from '../persistence/data-source';
 import { RuntimeEventEntity, RuntimeRunEntity, RuntimeSessionEntity, RuntimeWorkspaceEntity, type RuntimeEventKind, type RuntimeSessionRow } from './entities';
 import { parseCodexStatus } from './status';
@@ -242,10 +242,37 @@ export class NativeRuntimeService {
   private resuming = new Set<string>();
   private delegating = new Set<string>();
   private handingOff = new Set<string>();
+  private pendingReports = new Map<string, { token: string; delivery: Promise<void> }>();
+  private launchEpochs = new Map<string, number>();
+  private closingRuns = new Set<string>();
 
   constructor(sourcePromise = getPersistenceDataSource()) { this.sourcePromise = sourcePromise; }
 
   private async source() { return this.sourcePromise; }
+
+  private assertLaunchCurrent(runId: string, epoch: number): void {
+    if (this.closingRuns.has(runId) || (this.launchEpochs.get(runId) || 0) !== epoch) throw new Error('session_not_resumable');
+  }
+
+  private async saveLaunchRun(run: import('./entities').RuntimeRunRow, epoch: number): Promise<void> {
+    const source = await this.source();
+    await source.transaction(async manager => {
+      const repo = manager.getRepository(RuntimeRunEntity);
+      const current = await repo.createQueryBuilder('run').setLock('pessimistic_write').where('run.id = :id', { id: run.id }).getOneOrFail();
+      if (current.phase === 'done') throw new Error('session_not_resumable');
+      this.assertLaunchCurrent(run.id, epoch);
+      await repo.save(run);
+    });
+  }
+
+  private trackReportHandoff(runId: string, cwd: string, nativeId: string, token: string): void {
+    if (this.pendingReports.get(runId)?.token === token) return;
+    const pending = { token, delivery: Promise.resolve() };
+    this.pendingReports.set(runId, pending);
+    pending.delivery = this.confirmReportHandoff(runId, cwd, nativeId, token, pending)
+      .catch(() => undefined)
+      .finally(() => { if (this.pendingReports.get(runId) === pending) this.pendingReports.delete(runId); });
+  }
 
   private supervisorRoutingPrompt(taskId: string, request: string, snapshot: RoutingPolicySnapshot, continuation = false): string {
     const restartPrefix = continuation ? 'The server restarted while this Supervisor turn was unfinished. Continue in this same native conversation and return the required JSON routing decision using the saved policy below.\n\n' : '';
@@ -359,7 +386,9 @@ export class NativeRuntimeService {
   }
 
   async delegatePeer(runId: string): Promise<RunPublic> {
+    const epoch = this.launchEpochs.get(runId) || 0;
     await this.recover();
+    this.assertLaunchCurrent(runId, epoch);
     if (this.delegating.has(runId)) throw new Error('runtime_busy');
     this.delegating.add(runId);
     try {
@@ -370,7 +399,15 @@ export class NativeRuntimeService {
         const repo = manager.getRepository(RuntimeRunEntity);
         const current = await repo.createQueryBuilder('run').setLock('pessimistic_write').where('run.id = :id', { id: runId }).getOne();
         if (!current) throw new Error('run_not_found');
-        if (current.phase === 'peer_running' || current.phase === 'supervisor_reporting' || current.phase === 'done') return current;
+        this.assertLaunchCurrent(runId, epoch);
+        if (current.phase === 'peer_running') {
+          const peer = await manager.getRepository(RuntimeSessionEntity).findOneBy({ runId, role: 'peer' });
+          // No UUID means bootstrap never reached task submission. Reuse the saved choice.
+          if (!peer || peer.nativeConversationId || !['error', 'interrupted', 'closed'].includes(peer.status)) return current;
+          if (this.live.has(peer.id)) throw new Error('runtime_busy');
+          current.phase = 'delegating';
+        }
+        if (current.phase === 'supervisor_reporting' || current.phase === 'done') return current;
         if (current.phase !== 'supervisor_delegation' && current.phase !== 'delegating') throw new Error('run_not_delegatable');
         current.phase = 'delegating'; current.status = 'active'; current.updatedAt = new Date();
         await repo.save(current); return current;
@@ -388,10 +425,11 @@ export class NativeRuntimeService {
             const latest = await appServer.latestTurn(peer.nativeConversationId);
             if (!latest || latest.status !== 'completed') continuation = `Continue the original delegated read-only task in this same conversation. Original task: ${run.prompt}\nSupervisor delegation: ${run.delegation || ''}`;
           } finally { await appServer.close(); }
-          await this.spawnSession(peer.id, continuation);
+          this.assertLaunchCurrent(runId, epoch);
+          await this.spawnSession(peer.id, continuation, false, { runId, epoch });
         }
         run = await runRepo.findOneByOrFail({ id: runId });
-        run.phase = 'peer_running'; run.status = 'active'; run.updatedAt = new Date(); await runRepo.save(run);
+        run.phase = 'peer_running'; run.status = 'active'; run.updatedAt = new Date(); await this.saveLaunchRun(run, epoch);
         return this.getRun(runId);
       }
       const snapshot = run.routingSnapshot as RoutingPolicySnapshot | null;
@@ -408,7 +446,7 @@ export class NativeRuntimeService {
           run.delegation = decision.instruction;
           run.delegationTurnId = turn.turnId;
           run.updatedAt = new Date();
-          await runRepo.save(run);
+          await this.saveLaunchRun(run, epoch);
           if (decision.provider !== 'codex') throw new Error('routing_provider_runner_unsupported');
         } else {
           // Pre-routing runs retain the original free-text delegation behavior.
@@ -416,7 +454,7 @@ export class NativeRuntimeService {
           run.delegationTurnId = turn.turnId;
         }
         run.updatedAt = new Date();
-        await runRepo.save(run);
+        await this.saveLaunchRun(run, epoch);
       }
       if (snapshot) {
         const decision = run.routingDecision as RoutingDecision | null;
@@ -424,14 +462,22 @@ export class NativeRuntimeService {
         // Reapply the persisted choice so retries after any checkpoint use the same configured runner.
         applyRoutingDecisionToPeer(peer, decision);
       }
-      peer.status = 'starting'; peer.updatedAt = new Date();
-      await source.getRepository(RuntimeSessionEntity).save(peer);
+      await source.transaction(async manager => {
+        const sessions = manager.getRepository(RuntimeSessionEntity);
+        await sessions.createQueryBuilder('session').setLock('pessimistic_write').where('session.id = :id', { id: peer.id }).getOneOrFail();
+        this.assertLaunchCurrent(runId, epoch);
+        peer.status = 'starting'; peer.pid = null; peer.exitCode = null; peer.endedAt = null; peer.updatedAt = new Date();
+        await sessions.save(peer);
+      });
       const delegatedPrompt = `You are the single delegated peer for task ${run.taskId}. Carry out the original request only within the supervisor's bounded delegation. Use read-only inspection, do not modify files, cite concrete evidence, and report limitations. Original request: ${run.prompt}\n\nSupervisor delegation:\n${run.delegation}`;
-      await this.spawnSession(peer.id, delegatedPrompt, true);
+      this.assertLaunchCurrent(runId, epoch);
+      await this.spawnSession(peer.id, delegatedPrompt, true, { runId, epoch });
       run = await runRepo.findOneByOrFail({ id: runId });
-      run.phase = 'peer_running'; run.status = 'active'; run.updatedAt = new Date(); await runRepo.save(run);
+      run.phase = 'peer_running'; run.status = 'active'; run.updatedAt = new Date(); await this.saveLaunchRun(run, epoch);
       return this.getRun(runId);
     } catch (error) {
+      if ((this.launchEpochs.get(runId) || 0) !== epoch || this.closingRuns.has(runId)) throw error;
+      if (errMessage(error) === 'runtime_busy') throw error;
       if (['native_turn_not_completed', 'native_report_unavailable'].includes(errMessage(error))) {
         const runRepo = (await this.source()).getRepository(RuntimeRunEntity);
         await runRepo.update({ id: runId, phase: 'delegating' }, { phase: 'supervisor_delegation', status: 'active', updatedAt: new Date() });
@@ -442,27 +488,43 @@ export class NativeRuntimeService {
         await runRepo.update({ id: runId, phase: 'delegating' }, { phase: 'supervisor_delegation', status: 'active', updatedAt: new Date() });
         throw error;
       }
-      await this.failRun(runId, errMessage(error));
-      await this.closeRun(runId);
+      await this.failRun(runId, errMessage(error), epoch);
+      if ((this.launchEpochs.get(runId) || 0) === epoch && !this.closingRuns.has(runId)) await this.closeRun(runId);
       throw error;
     } finally { this.delegating.delete(runId); }
   }
 
-  private async failRun(runId: string, message: string) {
+  private async failRun(runId: string, message: string, epoch?: number) {
+    if (epoch !== undefined && ((this.launchEpochs.get(runId) || 0) !== epoch || this.closingRuns.has(runId))) return;
     const source = await this.source();
     const sessions = await source.getRepository(RuntimeSessionEntity).findBy({ runId });
     for (const session of sessions) {
       if (this.live.has(session.id)) continue;
-      if (session.status === 'starting' || session.status === 'queued') { session.status = 'error'; session.endedAt = new Date(); await source.getRepository(RuntimeSessionEntity).save(session); await this.appendEvent(session.id, { kind: 'error', status: 'error', text: message }); }
+      if (session.status === 'starting' || session.status === 'queued') {
+        if (epoch !== undefined && ((this.launchEpochs.get(runId) || 0) !== epoch || this.closingRuns.has(runId))) return;
+        const failed = await source.getRepository(RuntimeSessionEntity).update({ id: session.id, status: session.status }, { status: 'error', endedAt: new Date(), updatedAt: new Date() });
+        if (!failed.affected || (epoch !== undefined && ((this.launchEpochs.get(runId) || 0) !== epoch || this.closingRuns.has(runId)))) continue;
+        await this.appendEvent(session.id, { kind: 'error', status: 'error', text: message });
+      }
     }
     const run = await source.getRepository(RuntimeRunEntity).findOneBy({ id: runId });
-    if (run) { run.status = 'error'; run.updatedAt = new Date(); await source.getRepository(RuntimeRunEntity).save(run); }
+    if (run && run.phase !== 'done') {
+      if (epoch !== undefined && ((this.launchEpochs.get(runId) || 0) !== epoch || this.closingRuns.has(runId))) return;
+      run.status = 'error'; run.updatedAt = new Date();
+      if (epoch === undefined) await source.getRepository(RuntimeRunEntity).save(run);
+      else {
+        try { await this.saveLaunchRun(run, epoch); }
+        catch (error) { if ((this.launchEpochs.get(runId) || 0) === epoch && !this.closingRuns.has(runId)) throw error; }
+      }
+    }
   }
 
-  private async spawnSession(sessionId: string, initialPrompt: string | null, createNewConversation = false): Promise<void> {
+  private async spawnSession(sessionId: string, initialPrompt: string | null, createNewConversation = false, launch?: { runId: string; epoch: number }): Promise<void> {
     const source = await this.source();
     const repo = source.getRepository(RuntimeSessionEntity);
     const row = await repo.findOneByOrFail({ id: sessionId });
+    const epoch = launch?.epoch ?? (this.launchEpochs.get(row.runId) || 0);
+    this.assertLaunchCurrent(row.runId, epoch);
     if (row.nativeConversationId && !UUID_RE.test(row.nativeConversationId)) throw new Error('native_conversation_unknown');
     if (!row.nativeConversationId && (!createNewConversation || !initialPrompt)) throw new Error('native_conversation_id_required');
     if (this.live.has(sessionId)) throw new Error('session_already_attached');
@@ -491,6 +553,7 @@ export class NativeRuntimeService {
     };
     const starting = await repo.update({ id: sessionId, status: 'starting' }, { pid: null, startedAt: new Date(), updatedAt: new Date() });
     if (!starting.affected) throw new Error('session_not_resumable');
+    this.assertLaunchCurrent(row.runId, epoch);
     const terminal = pty.spawn(process.execPath, ['-e', watchdog], { name: 'xterm-256color', cols: 100, rows: 30, cwd: row.cwd, env, encoding: null, handleFlowControl: true });
     let resolveExit!: () => void;
     const exited = new Promise<void>(resolve => { resolveExit = resolve; });
@@ -499,7 +562,7 @@ export class NativeRuntimeService {
     row.pid = null; row.status = 'starting'; row.startedAt = new Date(); row.updatedAt = new Date();
     const stopAfterStartupPersistenceFailure = async (error: unknown) => {
       processEntry.closing = true;
-      try { await this.failRun(row.runId, errMessage(error)); } catch { /* persistence failure must still terminate the child */ }
+      try { await this.failRun(row.runId, errMessage(error), epoch); } catch { /* persistence failure must still terminate the child */ }
       try { terminal.kill('SIGTERM'); } catch {}
     };
     processEntry.outputQueue = this.appendEvent(sessionId, { kind: 'status', status: 'starting', text: createNewConversation ? 'Starting a native Codex TUI; capturing its exact /status session UUID before sending the task.' : 'Resuming the persisted Codex conversation in a PTY.' })
@@ -507,21 +570,21 @@ export class NativeRuntimeService {
       .catch(stopAfterStartupPersistenceFailure);
     const failStatusCapture = async () => {
       processEntry.captureStatus = false;
-      await repo.update({ id: sessionId }, { status: 'error', endedAt: new Date(), pid: null, updatedAt: new Date() });
+      await repo.update({ id: sessionId, status: 'active' }, { status: 'error', endedAt: new Date(), pid: null, updatedAt: new Date() });
       await this.appendEvent(sessionId, { kind: 'error', status: 'error', text: 'Codex did not expose its exact session UUID through /status; task was not sent.' });
-      await this.failRun(row.runId, 'codex_session_id_capture_failed');
+      await this.failRun(row.runId, 'codex_session_id_capture_failed', epoch);
       processEntry.closing = true;
       try { terminal.kill('SIGTERM'); } catch {}
     };
     const requestSessionStatus = () => {
-      if (!processEntry.initialPrompt || processEntry.nativeConversationId || processEntry.closing) return;
+      if (!processEntry.initialPrompt || processEntry.nativeConversationId || processEntry.closing || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
       if (processEntry.statusAttempts >= 3) { void failStatusCapture(); return; }
       processEntry.statusAttempts++;
       const attempt = processEntry.statusAttempts;
       processEntry.captureStatus = true;
       processEntry.statusText = '';
       terminal.write('/status');
-      setTimeout(() => { if (processEntry.captureStatus && attempt === processEntry.statusAttempts) terminal.write('\r'); }, 300).unref();
+      setTimeout(() => { if (processEntry.captureStatus && attempt === processEntry.statusAttempts && !processEntry.closing && (this.launchEpochs.get(row.runId) || 0) === epoch) terminal.write('\r'); }, 300).unref();
       setTimeout(() => {
         if (processEntry.captureStatus && attempt === processEntry.statusAttempts) {
           processEntry.captureStatus = false;
@@ -530,7 +593,7 @@ export class NativeRuntimeService {
       }, 7000).unref();
     };
     const captureSessionStatus = (bytes: Buffer) => {
-      if (!processEntry.captureStatus || !processEntry.initialPrompt) return;
+      if (!processEntry.captureStatus || !processEntry.initialPrompt || processEntry.closing || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
       processEntry.statusText = (processEntry.statusText + bytes.toString('utf8')).slice(-32_000);
       const status = parseCodexStatus(processEntry.statusText);
       if (!status) return;
@@ -540,13 +603,18 @@ export class NativeRuntimeService {
       processEntry.nativeConversationId = nativeId;
       void (async () => {
         const captured = await repo.findOneByOrFail({ id: sessionId });
+        if (processEntry.closing || this.live.get(sessionId) !== processEntry || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
         if (captured.nativeConversationId && captured.nativeConversationId !== nativeId) throw new Error('native_conversation_id_mismatch');
         captured.nativeConversationId = nativeId;
         if (status.model) captured.model = status.model;
         if (status.reasoningEffort) captured.reasoningEffort = status.reasoningEffort;
         captured.updatedAt = new Date();
-        await repo.save(captured);
+        const capturedIdentity = await repo.update({ id: sessionId, status: 'active' }, {
+          nativeConversationId: nativeId, model: captured.model, reasoningEffort: captured.reasoningEffort, updatedAt: new Date(),
+        });
+        if (!capturedIdentity.affected || processEntry.closing || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
         const parentRun = await source.getRepository(RuntimeRunEntity).findOneBy({ id: row.runId });
+        if (processEntry.closing || this.live.get(sessionId) !== processEntry || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
         const snapshot = parentRun?.routingSnapshot as RoutingPolicySnapshot | null | undefined;
         if (snapshot) {
           const expectedEffort = row.role === 'supervisor' ? snapshot.policy.supervisor.effort : (parentRun?.routingDecision as RoutingDecision | null)?.effort;
@@ -555,8 +623,8 @@ export class NativeRuntimeService {
           if (!expectedEffort || !status.model || !status.reasoningEffort || status.reasoningEffort !== expectedEffort || modelMismatch) {
             processEntry.closing = true;
             await this.appendEvent(sessionId, { kind: 'error', status: 'error', text: `Codex /status did not confirm the configured ${row.role} model and effort; task was not sent.` });
-            await repo.update({ id: sessionId }, { status: 'error', endedAt: new Date(), pid: null, updatedAt: new Date() });
-            await this.failRun(row.runId, 'routing_session_configuration_mismatch');
+            await repo.update({ id: sessionId, status: 'active' }, { status: 'error', endedAt: new Date(), pid: null, updatedAt: new Date() });
+            await this.failRun(row.runId, 'routing_session_configuration_mismatch', epoch);
             try { terminal.kill('SIGTERM'); } catch {}
             return;
           }
@@ -564,33 +632,38 @@ export class NativeRuntimeService {
         processEntry.outputQueue = processEntry.outputQueue.then(async () => {
           const latest = await repo.findOneByOrFail({ id: sessionId });
           if (latest.nativeConversationId && latest.nativeConversationId !== nativeId) throw new Error('native_conversation_id_mismatch');
-          if (processEntry.closing || !this.live.has(sessionId)) return;
+          if (processEntry.closing || this.live.get(sessionId) !== processEntry || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
           latest.nativeConversationId = nativeId;
           if (status.model) latest.model = status.model;
           if (status.reasoningEffort) latest.reasoningEffort = status.reasoningEffort;
           latest.updatedAt = new Date();
-          await repo.save(latest);
-          if (processEntry.closing || !this.live.has(sessionId)) return;
+          const savedIdentity = await repo.update({ id: sessionId, status: 'active' }, {
+            nativeConversationId: nativeId, model: latest.model, reasoningEffort: latest.reasoningEffort, updatedAt: new Date(),
+          });
+          if (!savedIdentity.affected) return;
+          if (processEntry.closing || this.live.get(sessionId) !== processEntry || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
           await this.appendEvent(sessionId, { kind: 'status', status: 'active', text: 'Exact native UUID and effective model/effort captured from Codex /status; sending the original task in this TUI.' });
+          if (processEntry.closing || this.live.get(sessionId) !== processEntry || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
           terminal.write(`\u001b[200~${prompt}\u001b[201~`);
-          setTimeout(() => { terminal.write('\r'); processEntry.bootstrapReady = true; }, 300).unref();
+          setTimeout(() => { if (!processEntry.closing && this.live.get(sessionId) === processEntry && (this.launchEpochs.get(row.runId) || 0) === epoch) { terminal.write('\r'); processEntry.bootstrapReady = true; } }, 300).unref();
           processEntry.initialPrompt = null;
         });
-      })().catch(error => { void this.failRun(row.runId, errMessage(error)); });
+      })().catch(error => { void this.failRun(row.runId, errMessage(error), epoch); });
     };
     const confirmNativeOutput = (output: Buffer) => {
       if (!output.length || processEntry.confirmed || processEntry.nativePid === null) return;
       processEntry.confirmed = true;
       const nativePid = processEntry.nativePid;
       processEntry.outputQueue = processEntry.outputQueue.then(async () => {
-        if (processEntry.closing || this.live.get(sessionId) !== processEntry) return;
-        await repo.update({ id: sessionId }, { status: 'active', pid: nativePid, updatedAt: new Date() });
+        if (processEntry.closing || this.live.get(sessionId) !== processEntry || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
+        const confirmed = await repo.update({ id: sessionId, status: 'starting' }, { status: 'active', pid: nativePid, updatedAt: new Date() });
+        if (!confirmed.affected || processEntry.closing || (this.launchEpochs.get(row.runId) || 0) !== epoch) return;
         await this.appendEvent(sessionId, { kind: 'status', status: 'active', text: createNewConversation ? 'Native Codex TUI is active; reading its session identity before task submission.' : 'Native Codex process is attached to the persisted conversation.' });
         await this.appendOutput(sessionId, output);
         const parentRun = await source.getRepository(RuntimeRunEntity).findOneBy({ id: row.runId });
-        if (parentRun && parentRun.status === 'starting') { parentRun.status = 'active'; parentRun.updatedAt = new Date(); await source.getRepository(RuntimeRunEntity).save(parentRun); }
+        if (parentRun && parentRun.status === 'starting') { parentRun.status = 'active'; parentRun.updatedAt = new Date(); await this.saveLaunchRun(parentRun, epoch); }
         if (createNewConversation) setTimeout(requestSessionStatus, 3000).unref();
-      }).catch(error => this.failRun(row.runId, errMessage(error)));
+      }).catch(error => this.failRun(row.runId, errMessage(error), epoch));
     };
     terminal.onData(data => {
       processEntry.lastActivity = Date.now();
@@ -622,7 +695,7 @@ export class NativeRuntimeService {
         return;
       }
       if (!processEntry.confirmed) { confirmNativeOutput(bytes); return; }
-      processEntry.outputQueue = processEntry.outputQueue.then(() => this.appendOutput(sessionId, bytes)).catch(error => this.failRun(row.runId, errMessage(error)));
+      processEntry.outputQueue = processEntry.outputQueue.then(() => this.appendOutput(sessionId, bytes)).catch(error => this.failRun(row.runId, errMessage(error), epoch));
       captureSessionStatus(bytes);
     });
     processEntry.exitDisposable = terminal.onExit(({ exitCode }) => { void this.onExit(sessionId, exitCode, processEntry).catch(() => undefined).finally(resolveExit); });
@@ -777,19 +850,48 @@ export class NativeRuntimeService {
   }
 
   async closeRun(runId: string): Promise<void> {
-    const sessions = await (await this.source()).getRepository(RuntimeSessionEntity).findBy({ runId });
-    await Promise.all(sessions.map(session => this.closeSession(session.id).catch(() => undefined)));
-    const processes = sessions.map(session => this.live.get(session.id)).filter((entry): entry is LiveProcess => Boolean(entry));
-    if (processes.length) {
-      await Promise.race([
-        Promise.all(processes.map(entry => entry.exited)),
-        new Promise(resolve => setTimeout(resolve, 5000)),
-      ]);
-    }
+    this.launchEpochs.set(runId, (this.launchEpochs.get(runId) || 0) + 1);
+    this.closingRuns.add(runId);
+    this.pendingReports.delete(runId);
+    try {
+      const source = await this.source();
+      const sessions = await source.transaction(async manager => {
+        await manager.query('SELECT pg_advisory_xact_lock($1)', [4815162342]);
+        const repo = manager.getRepository(RuntimeRunEntity);
+        const run = await repo.createQueryBuilder('run').setLock('pessimistic_write').where('run.id = :id', { id: runId }).getOne();
+        if (run && !['done', 'error'].includes(run.status)) {
+          run.status = 'interrupted'; run.updatedAt = new Date(); await repo.save(run);
+        }
+        const sessionRepo = manager.getRepository(RuntimeSessionEntity);
+        const rows = await sessionRepo.findBy({ runId });
+        for (const session of rows) {
+          const entry = this.live.get(session.id);
+          if (entry) entry.closing = true;
+          else if (['starting', 'queued', 'active', 'closing'].includes(session.status)) {
+            session.status = 'closed'; session.pid = null; session.endedAt = new Date(); session.updatedAt = new Date();
+            await sessionRepo.save(session);
+          }
+        }
+        return rows;
+      });
+      const processes = sessions.map(session => this.live.get(session.id)).filter((entry): entry is LiveProcess => Boolean(entry));
+      for (const entry of processes) {
+        try { entry.terminal.kill('SIGTERM'); } catch {}
+        const timer = setTimeout(() => { try { entry.terminal.kill('SIGKILL'); } catch {} }, 1800); timer.unref();
+      }
+      if (processes.length) {
+        await Promise.race([
+          Promise.all(processes.map(entry => entry.exited)),
+          new Promise(resolve => setTimeout(resolve, 5000)),
+        ]);
+      }
+    } finally { this.closingRuns.delete(runId); }
   }
 
   async submitReport(runId: string): Promise<RunPublic> {
+    const epoch = this.launchEpochs.get(runId) || 0;
     await this.recover();
+    this.assertLaunchCurrent(runId, epoch);
     if (this.handingOff.has(runId)) throw new Error('runtime_busy');
     this.handingOff.add(runId);
     try {
@@ -802,7 +904,7 @@ export class NativeRuntimeService {
     if (!run.report) {
       const { turn } = await this.nativeTurn(peer.id);
       run.report = turn.text.slice(0, 20_000); run.reportTurnId = turn.turnId; run.phase = 'supervisor_reporting'; run.status = 'reporting'; run.reportDelivered = false;
-      run.updatedAt = new Date(); await source.getRepository(RuntimeRunEntity).save(run);
+      run.updatedAt = new Date(); await this.saveLaunchRun(run, epoch);
     }
     const liveSupervisor = this.live.get(supervisor.id);
     const token = `ORC_REPORT_${run.id}_${run.reportTurnId}`;
@@ -810,37 +912,45 @@ export class NativeRuntimeService {
       const appServer = await CodexAppServer.create(supervisor.cwd);
       try { run.reportDelivered = await appServer.hasUserMessageContaining(supervisor.nativeConversationId!, token); }
       finally { await appServer.close(); }
-      if (!run.reportDelivered) { run.updatedAt = new Date(); await source.getRepository(RuntimeRunEntity).save(run); }
+      if (!run.reportDelivered && (this.launchEpochs.get(runId) || 0) === epoch) {
+        await source.getRepository(RuntimeRunEntity).update({ id: runId, phase: 'supervisor_reporting', status: 'reporting', reportTurnId: run.reportTurnId! }, { reportDelivered: false, updatedAt: new Date() });
+      }
     }
-    if (!run.reportDelivered && liveSupervisor?.confirmed && !liveSupervisor.closing) {
+    if (!run.reportDelivered && this.pendingReports.get(runId)?.token !== token && liveSupervisor?.confirmed && !liveSupervisor.closing) {
       const appServer = await CodexAppServer.create(supervisor.cwd);
       try {
-        if (await appServer.hasUserMessageContaining(supervisor.nativeConversationId!, token)) run.reportDelivered = true;
+        const delivered = await appServer.hasUserMessageContaining(supervisor.nativeConversationId!, token);
+        if ((this.launchEpochs.get(runId) || 0) !== epoch || this.closingRuns.has(runId) || liveSupervisor.closing || this.live.get(supervisor.id) !== liveSupervisor) return this.getRun(runId);
+        if (delivered) run.reportDelivered = true;
         else {
           const handoff = `${token}\nPeer report for task ${run.taskId}:\n${run.report}\n\nSummarize the peer's actual result. Keep the summary read-only and include limitations.`;
           liveSupervisor.lastActivity = Date.now(); liveSupervisor.terminal.write(`\u001b[200~${handoff}\u001b[201~\r`);
-          void this.confirmReportHandoff(run.id, supervisor.cwd, supervisor.nativeConversationId!, token);
+          this.trackReportHandoff(run.id, supervisor.cwd, supervisor.nativeConversationId!, token);
         }
       } finally { await appServer.close(); }
-      run.updatedAt = new Date(); await source.getRepository(RuntimeRunEntity).save(run);
+      if (run.reportDelivered && (this.launchEpochs.get(runId) || 0) === epoch) {
+        await source.getRepository(RuntimeRunEntity).update({ id: runId, phase: 'supervisor_reporting', status: 'reporting', reportTurnId: run.reportTurnId! }, { reportDelivered: true, updatedAt: new Date() });
+      }
     }
     return this.getRun(runId);
     } finally { this.handingOff.delete(runId); }
   }
 
-  private async confirmReportHandoff(runId: string, cwd: string, nativeId: string, token: string): Promise<void> {
+  private async confirmReportHandoff(runId: string, cwd: string, nativeId: string, token: string, pending: { token: string; delivery: Promise<void> }): Promise<void> {
     for (let attempt = 0; attempt < 24; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 500));
+      if (this.pendingReports.get(runId) !== pending) return;
       try {
         const appServer = await CodexAppServer.create(cwd);
         let confirmed = false;
         try { confirmed = await appServer.hasUserMessageContaining(nativeId, token); }
         finally { await appServer.close(); }
+        if (this.pendingReports.get(runId) !== pending) return;
         if (!confirmed) continue;
         const repo = (await this.source()).getRepository(RuntimeRunEntity);
         const run = await repo.findOneBy({ id: runId });
-        if (run && token === `ORC_REPORT_${run.id}_${run.reportTurnId}`) {
-          run.reportDelivered = true; run.updatedAt = new Date(); await repo.save(run);
+        if (run && this.pendingReports.get(runId) === pending && token === `ORC_REPORT_${run.id}_${run.reportTurnId}`) {
+          await repo.update({ id: runId, phase: 'supervisor_reporting', status: 'reporting', reportTurnId: run.reportTurnId! }, { reportDelivered: true, updatedAt: new Date() });
         }
         return;
       } catch { /* Recovery reconciles from the exact native thread history. */ }
@@ -848,7 +958,9 @@ export class NativeRuntimeService {
   }
 
   async finalizeRun(runId: string): Promise<RunPublic> {
+    const epoch = this.launchEpochs.get(runId) || 0;
     await this.recover();
+    this.assertLaunchCurrent(runId, epoch);
     const source = await this.source();
     const repo = source.getRepository(RuntimeRunEntity);
     const run = await repo.findOneBy({ id: runId });
@@ -865,12 +977,13 @@ export class NativeRuntimeService {
     finally { await appServer.close(); }
     if (!acknowledged || turn.turnId === run.delegationTurnId) throw new Error('supervisor_report_not_ready');
     run.finalReport = turn.text; run.finalTurnId = turn.turnId; run.phase = 'done'; run.status = 'done'; run.updatedAt = new Date();
-    await repo.save(run);
+    await this.saveLaunchRun(run, epoch);
     await this.closeRun(runId);
     return this.getRun(runId);
   }
 
   async resumeSession(sessionId: string): Promise<SessionPublic> {
+    const invocationEpochs = new Map(this.launchEpochs);
     await this.recover();
     const source = await this.source();
     if (this.resuming.has(sessionId) || this.live.has(sessionId)) throw new Error('session_not_resumable');
@@ -880,6 +993,8 @@ export class NativeRuntimeService {
     if (!existing.nativeConversationId || !UUID_RE.test(existing.nativeConversationId)) throw new Error('native_conversation_unknown');
     const existingRun = await source.getRepository(RuntimeRunEntity).findOneBy({ id: existing.runId });
     if (!existingRun || existingRun.phase === 'done') throw new Error('session_not_resumable');
+    const epoch = invocationEpochs.get(existing.runId) || 0;
+    this.assertLaunchCurrent(existing.runId, epoch);
     this.resuming.add(sessionId);
     let row: import('./entities').RuntimeSessionRow | null = null;
     try {
@@ -892,6 +1007,13 @@ export class NativeRuntimeService {
         if (!['interrupted', 'closed', 'error'].includes(session.status)) throw new Error('session_not_resumable');
         const run = await manager.getRepository(RuntimeRunEntity).createQueryBuilder('run').setLock('pessimistic_write').where('run.id = :id', { id: session.runId }).getOne();
         if (!run || run.phase === 'done') throw new Error('session_not_resumable');
+        this.assertLaunchCurrent(session.runId, epoch);
+        const busy = await repo.findOneBy([
+          { runId: Not(session.runId), status: 'starting' },
+          { runId: Not(session.runId), status: 'active' },
+          { runId: Not(session.runId), status: 'closing' },
+        ]);
+        if (busy) throw new Error('runtime_busy');
         session.status = 'starting'; session.pid = null; session.exitCode = null; session.startedAt = null; session.endedAt = null; session.updatedAt = new Date();
         await repo.save(session); return session;
       });
@@ -906,7 +1028,7 @@ export class NativeRuntimeService {
         try { handoff = await appServer.latestTurnHasUserMessage(row.nativeConversationId!, token); }
         finally { await appServer.close(); }
         if (handoff.found) {
-          run.reportDelivered = true; run.updatedAt = new Date(); await runRepo.save(run);
+          run.reportDelivered = true; run.updatedAt = new Date(); await this.saveLaunchRun(run, epoch);
           if (handoff.turn?.status !== 'completed') prompt = `${token}\nContinue the final summary in this same supervisor conversation for the peer report already provided in the interrupted preceding turn. Do not request or reprocess the peer report; finish the supervisor's read-only summary and limitations.`;
         } else {
           run.reportDelivered = false;
@@ -927,17 +1049,18 @@ export class NativeRuntimeService {
           if (!turn || turn.status !== 'completed') prompt = `The server restarted while your original delegated read-only task was unfinished. Continue that task in this same conversation. Original task: ${run.prompt}\nSupervisor delegation: ${run.delegation || ''}`;
         } finally { await appServer.close(); }
       }
-      run.status = run.phase === 'supervisor_reporting' ? 'reporting' : 'active'; run.updatedAt = new Date(); await runRepo.save(run);
-      await this.spawnSession(sessionId, prompt);
-      if (row.role === 'supervisor' && run.report && run.reportTurnId) void this.confirmReportHandoff(run.id, row.cwd, row.nativeConversationId!, `ORC_REPORT_${run.id}_${run.reportTurnId}`);
+      run.status = run.phase === 'supervisor_reporting' ? 'reporting' : 'active'; run.updatedAt = new Date(); await this.saveLaunchRun(run, epoch);
+      this.assertLaunchCurrent(row.runId, epoch);
+      await this.spawnSession(sessionId, prompt, false, { runId: row.runId, epoch });
+      if (row.role === 'supervisor' && run.report && run.reportTurnId) this.trackReportHandoff(run.id, row.cwd, row.nativeConversationId!, `ORC_REPORT_${run.id}_${run.reportTurnId}`);
       return this.getSession(sessionId);
     } catch (error) {
-      if (row) {
+      if (row && (this.launchEpochs.get(row.runId) || 0) === epoch && !this.closingRuns.has(row.runId)) {
         await sessions.update({ id: sessionId, status: 'starting' }, { status: 'error', endedAt: new Date(), pid: null, updatedAt: new Date() });
         await this.appendEvent(sessionId, { kind: 'error', status: 'error', text: errMessage(error) });
         const runRepo = source.getRepository(RuntimeRunEntity);
         const run = await runRepo.findOneBy({ id: row.runId });
-        if (run && run.phase !== 'done') { run.status = 'interrupted'; run.updatedAt = new Date(); await runRepo.save(run); }
+        if (run && run.phase !== 'done') { run.status = 'interrupted'; run.updatedAt = new Date(); await this.saveLaunchRun(run, epoch); }
       }
       throw error;
     } finally { this.resuming.delete(sessionId); }
